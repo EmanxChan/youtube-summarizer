@@ -1,0 +1,151 @@
+content-summarizer/
+│
+├── README.md                          # Main project documentation
+├── ORGANIZATION_SUMMARY.md            # Quick reference guide
+│
+├── src/                               # Core application code
+│   ├── __init__.py
+│   ├── youtube_slash_command.py       # Main CLI (99KB, 2703 lines)
+│   ├── summarizer_ui.py               # Streamlit web UI
+│   ├── ai_summarizer.py               # AI integration
+│   ├── listen_notes_client.py         # Listen Notes API client
+│   ├── podcast_cache.py               # Podcast caching layer
+│   ├── transcript_metrics.py          # Metrics tracking
+│   └── extractors/                    # Content extraction modules
+│       ├── __init__.py
+│       ├── enhanced_extractor.py
+│       ├── ytdlp_transcript_extractor.py
+│       ├── working_transcript_fetcher.py
+│       └── video_validator.py
+│
+├── docs/                              # All documentation
+│   ├── user-guide/                    # End-user documentation (4 files)
+│   │   ├── START_HERE.md
+│   │   ├── STREAMLIT_USAGE_GUIDE.md
+│   │   ├── NEW_SEARCH_FEATURE_GUIDE.md
+│   │   └── HOW_TO_GET_PODCAST_ID.md
+│   │
+│   ├── setup/                         # Installation guides (6 files)
+│   │   ├── FREE_AI_SETUP.md
+│   │   ├── OLLAMA_QUICK_GUIDE.md
+│   │   ├── DEEPSEEK_SETUP.md
+│   │   ├── FFMPEG_INSTALL.md
+│   │   ├── SETUP_SLASH_COMMAND.md
+│   │   └── LOCALHOST_READY.md
+│   │
+│   ├── features/                      # Feature documentation (7 files)
+│   │   ├── AI_SUMMARIZATION_README.md
+│   │   ├── PODCAST_SUPPORT.md
+│   │   ├── YOUTUBE_TRANSCRIPT_README.md
+│   │   ├── LISTEN_NOTES_USAGE_GUIDE.md
+│   │   ├── LISTEN_NOTES_QUICK_REF.md
+│   │   ├── QUICK_START_LISTEN_NOTES.md
+│   │   └── GET_PODCAST_ID_GUIDE.md
+│   │
+│   ├── troubleshooting/               # Bug fixes & solutions (6 files)
+│   │   ├── BUG_FIX_SUMMARY.md
+│   │   ├── FIXES_QUICK_REFERENCE.md
+│   │   ├── RSS_EPISODE_MATCHING_FIX.md
+│   │   ├── YOUTUBE_FALLBACK_FIX.md
+│   │   ├── PODCAST_FIXES_COMPLETE.md
+│   │   └── AI_FIXED.md
+│   │
+│   ├── development/                   # Dev logs & technical (9 files)
+│   │   ├── SESSION_SUMMARY.md
+│   │   ├── DATA_FLOW_VISUAL.md
+│   │   ├── PROCESSING_TRACE.md
+│   │   ├── DEPLOYMENT_COMPLETE.md
+│   │   ├── PERFORMANCE_OPTIMIZATION.md
+│   │   ├── PERFORMANCE_IMPROVEMENTS_COMPLETE.md
+│   │   ├── SEARCH_FEATURE_COMPLETE.md
+│   │   ├── DEPLOYMENT_SUCCESS.md
+│   │   └── PROJECT_ORGANIZATION_COMPLETE.md
+│   │
+│   ├── migration/                     # Migration docs (3 + 7 files)
+│   │   ├── IMPLEMENTATION_SUMMARY.md
+│   │   ├── LISTEN_NOTES_MIGRATION.md
+│   │   ├── MIGRATION_CHECKLIST.md
+│   │   └── taddy/                     # Deprecated Taddy docs (7 files)
+│   │       ├── TADDY_INTEGRATION.md
+│   │       ├── TADDY_API_FIXES.md
+│   │       ├── TADDY_IMPLEMENTATION_COMPLETE.md
+│   │       ├── TADDY_SETUP_COMPLETE.md
+│   │       ├── TADDY_VS_ALTERNATIVES.md
+│   │       ├── QUICK_START_TADDY.md
+│   │       └── FIX_TADDY_CREDENTIALS.md
+│   │
+│   └── archive/                       # Old/unused docs (1 file)
+│       └── FFMPEG_INSTALLED.md
+│
+├── scripts/                           # Utility scripts (8 files)
+│   ├── install_ollama_mac.sh
+│   ├── setup_ai.sh
+│   ├── setup_youtube_command.sh
+│   ├── restart_streamlit.sh           # ✅ Updated paths
+│   ├── test_ollama_youtube.sh
+│   ├── slash_command_usage.sh
+│   ├── usage_example.sh
+│   └── get_podcast_id.py
+│
+├── tests/                             # Test files (6 files)
+│   ├── test_youtube_slash.py
+│   ├── test_listen_notes_example.py
+│   ├── test_streamlit_env.py
+│   ├── test_youtube_api.py
+│   ├── test_taddy_example.py          # Legacy test
+│   └── rate_limit_check.py
+│
+├── legacy/                            # Deprecated code (13 files)
+│   ├── taddy_integration.py           # Replaced by Listen Notes
+│   ├── taddy_cache.py
+│   ├── youtube_slash_command.py.backup
+│   ├── simple_youtube_summarizer.py
+│   ├── working_youtube_summarizer.py
+│   ├── final_youtube_summarizer.py
+│   ├── advanced_youtube_summarizer.py
+│   ├── youtube_transcript_summarizer.py
+│   ├── demo_slash_youtube.py
+│   ├── demo_working_summary.py
+│   ├── quick_retry.py
+│   ├── retry_transcript.py
+│   ├── droid_slash_cli.py
+│   └── http_transcript.py
+│
+├── config/                            # Configuration (3 files)
+│   ├── requirements.txt               # Python dependencies
+│   ├── requirements_ai.txt            # AI-specific dependencies
+│   ├── .env.example                   # ✨ NEW: Environment template
+│   └── .streamlit/
+│       └── config.toml
+│
+├── data/                              # Runtime data
+│   └── nltk_data/                     # NLTK language models
+│       ├── tokenizers/
+│       └── corpora/
+│
+├── bin/                               # Executables (3 files)
+│   ├── ffmpeg                         # Audio encoding (80MB)
+│   ├── ffprobe                        # Audio metadata (80MB)
+│   └── youtube                        # ✨ NEW: Symlink to main script
+│
+└── output/                            # Generated summaries
+    └── summaries/
+        └── (linked to ~/Documents/YouTube videos/)
+
+SUMMARY:
+========
+Total Files: 81 organized files
+- Core code: 12 files (src/)
+- Documentation: 42 files (docs/)
+- Scripts: 8 files (scripts/)
+- Tests: 6 files (tests/)
+- Legacy: 13 files (legacy/)
+- Config: 3 files (config/)
+- Binaries: 3 files (bin/)
+
+Directories: 16 total
+- 7 doc categories
+- 4 code categories
+- 5 support categories
+
+Status: ✅ Fully organized and working!

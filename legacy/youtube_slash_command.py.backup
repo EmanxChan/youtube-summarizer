@@ -1,0 +1,1138 @@
+#!/usr/bin/env python3
+"""
+YouTube slash command handler.
+Handles /youtube command with URL or search query.
+Now also supports article URLs for content summarization.
+"""
+import sys
+import json
+import subprocess
+import re
+import argparse
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+from enum import Enum
+
+# Try to import AI summarizer (optional)
+try:
+    from ai_summarizer import AITranscriptSummarizer
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
+    print("Note: AI summarization not available. Install with: pip install -r requirements_ai.txt", file=sys.stderr)
+
+# Try to import article parsing libraries (optional)
+try:
+    from bs4 import BeautifulSoup
+    import requests
+    ARTICLE_SUPPORT = True
+except ImportError:
+    ARTICLE_SUPPORT = False
+
+
+class ContentType(Enum):
+    """Type of content to process"""
+    VIDEO = "video"
+    ARTICLE = "article"
+
+
+def slugify(text, max_length=100):
+    """Convert text to safe filename slug"""
+    # Remove special characters, keep alphanumeric and spaces
+    slug = re.sub(r'[^\w\s-]', '', text.lower())
+    # Replace spaces and multiple hyphens with single hyphen
+    slug = re.sub(r'[-\s]+', '-', slug)
+    # Remove leading/trailing hyphens
+    slug = slug.strip('-')
+    # Truncate to max length
+    if len(slug) > max_length:
+        slug = slug[:max_length].rstrip('-')
+    return slug or 'untitled'
+
+
+def extract_video_id(url_or_id):
+    """Extract YouTube video ID from URL or return as-is if already an ID"""
+    if "youtube.com/watch?v=" in url_or_id:
+        parsed = urlparse(url_or_id)
+        return parse_qs(parsed.query)["v"][0]
+    elif "youtu.be/" in url_or_id:
+        return url_or_id.split("youtu.be/")[1].split("?")[0]
+    elif re.match(r'^[a-zA-Z0-9_-]{11}$', url_or_id):
+        # Already a video ID
+        return url_or_id
+    else:
+        raise ValueError(f"Invalid YouTube URL or video ID format: {url_or_id}")
+
+
+def detect_content_type(query):
+    """
+    Detect whether query is a YouTube video or article URL.
+    
+    Returns:
+        tuple: (ContentType, identifier) where identifier is video_id or article_url
+    """
+    # Check for YouTube patterns
+    if "youtube.com/watch" in query or "youtu.be/" in query:
+        try:
+            video_id = extract_video_id(query)
+            return (ContentType.VIDEO, video_id)
+        except:
+            pass
+    
+    # Check if it's an 11-char video ID
+    if re.match(r'^[a-zA-Z0-9_-]{11}$', query):
+        return (ContentType.VIDEO, query)
+    
+    # Check if it's a valid http/https URL
+    if query.startswith(('http://', 'https://')):
+        return (ContentType.ARTICLE, query)
+    
+    # Default to video (for search queries)
+    return (ContentType.VIDEO, query)
+
+
+def fetch_article_content(url):
+    """
+    Fetch and parse article content from URL.
+    
+    Args:
+        url: Article URL to fetch
+        
+    Returns:
+        tuple: (title, cleaned_text)
+        
+    Raises:
+        ValueError: If content is too short or cannot be extracted
+        ConnectionError: If URL cannot be reached
+    """
+    if not ARTICLE_SUPPORT:
+        raise ImportError(
+            "Article support not available. Install dependencies: "
+            "pip install beautifulsoup4 lxml"
+        )
+    
+    try:
+        # Fetch with desktop user agent to avoid bot detection
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                         'AppleWebKit/537.36 (KHTML, like Gecko) '
+                         'Chrome/120.0.0.0 Safari/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        response.raise_for_status()
+        
+    except requests.exceptions.Timeout:
+        raise ConnectionError(f"Request timed out after 15 seconds: {url}")
+    except requests.exceptions.ConnectionError:
+        raise ConnectionError(f"Cannot reach URL: {url}")
+    except requests.exceptions.HTTPError as e:
+        raise ConnectionError(f"Failed to fetch (status {response.status_code}): {url}")
+    except Exception as e:
+        raise ConnectionError(f"Error fetching URL: {e}")
+    
+    # Parse HTML
+    try:
+        soup = BeautifulSoup(response.content, 'lxml')
+    except:
+        # Fallback to html.parser if lxml not available
+        soup = BeautifulSoup(response.content, 'html.parser')
+    
+    # Extract title
+    title = None
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+    elif soup.h1:
+        title = soup.h1.get_text().strip()
+    
+    if not title:
+        # Use domain as fallback
+        parsed = urlparse(url)
+        title = parsed.netloc.replace('www.', '')
+    
+    # Remove unwanted elements
+    for element in soup.find_all(['script', 'style', 'noscript', 'nav', 'footer', 'aside', 'header']):
+        element.decompose()
+    
+    # Extract text from meaningful elements
+    text_parts = []
+    
+    # Try to find article content first
+    article = soup.find('article')
+    if article:
+        content_root = article
+    else:
+        content_root = soup.body if soup.body else soup
+    
+    # Extract text from paragraphs, headings, lists, blockquotes
+    for element in content_root.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote']):
+        text = element.get_text(separator=' ', strip=True)
+        if text and len(text) > 20:  # Skip very short fragments
+            text_parts.append(text)
+    
+    # Join with paragraph separators
+    full_text = '\n\n'.join(text_parts)
+    
+    # Normalize whitespace
+    full_text = re.sub(r'\s+', ' ', full_text)  # Collapse spaces
+    full_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', full_text)  # Max 2 newlines
+    full_text = full_text.strip()
+    
+    # Validate minimum content length
+    if len(full_text) < 200:
+        raise ValueError(
+            f"Article content too short ({len(full_text)} chars, minimum 200). "
+            "URL may not contain readable article content."
+        )
+    
+    return (title, full_text)
+
+
+def is_url(text):
+    """Check if text looks like a URL"""
+    return text.startswith(('http://', 'https://', 'youtu.be'))
+
+
+def search_youtube(query):
+    """Search YouTube using yt-dlp and return video metadata"""
+    try:
+        cmd = [
+            'python3', '-m', 'yt_dlp',
+            f'ytsearch1:{query}',
+            '--print-json',
+            '--skip-download'
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            print(f"Error searching YouTube: {result.stderr}", file=sys.stderr)
+            return None
+        
+        # Parse JSON output
+        try:
+            video_data = json.loads(result.stdout.strip())
+            return {
+                'id': video_data.get('id'),
+                'title': video_data.get('title'),
+                'url': video_data.get('webpage_url'),
+                'uploader': video_data.get('uploader'),
+                'duration': video_data.get('duration')
+            }
+        except json.JSONDecodeError as e:
+            print(f"Error parsing search results: {e}", file=sys.stderr)
+            return None
+            
+    except subprocess.TimeoutExpired:
+        print("Error: Search timed out", file=sys.stderr)
+        return None
+    except FileNotFoundError:
+        print("Error: yt-dlp not found. Install with: pip install yt-dlp", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"Error during search: {e}", file=sys.stderr)
+        return None
+
+
+def fetch_transcript_ytdlp(video_id):
+    """Fallback method: fetch transcript using yt-dlp"""
+    import tempfile
+    import os
+    
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cmd = [
+                'python3', '-m', 'yt_dlp',
+                f'https://www.youtube.com/watch?v={video_id}',
+                '--write-auto-subs',
+                '--write-subs',
+                '--sub-lang', 'en',
+                '--skip-download',
+                '--output', f'{temp_dir}/subtitle',
+                '--convert-subs', 'vtt'
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            # Look for subtitle files
+            subtitle_files = []
+            for ext in ['.en.vtt', '.vtt']:
+                for filename in os.listdir(temp_dir):
+                    if filename.endswith(ext):
+                        subtitle_files.append(os.path.join(temp_dir, filename))
+            
+            if not subtitle_files:
+                return None
+            
+            # Read and parse VTT file
+            with open(subtitle_files[0], 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Extract text from VTT format
+            lines = content.split('\n')
+            transcript_lines = []
+            prev_line = None
+            for line in lines:
+                line = line.strip()
+                # Skip VTT headers, timestamps, and empty lines
+                if (line and 
+                    not line.startswith('WEBVTT') and 
+                    not line.startswith('Kind:') and
+                    not line.startswith('Language:') and
+                    not '-->' in line and
+                    not line.isdigit()):
+                    # Remove VTT tags like <c> </c>
+                    line = re.sub(r'<[^>]+>', '', line)
+                    # Skip duplicate consecutive lines (VTT format issue)
+                    if line != prev_line:
+                        transcript_lines.append(line)
+                        prev_line = line
+            
+            return ' '.join(transcript_lines)
+            
+    except Exception as e:
+        print(f"yt-dlp fallback failed: {e}", file=sys.stderr)
+        return None
+
+
+def fetch_transcript(video_id):
+    """Fetch transcript using enhanced multi-method approach with retry"""
+    max_retries = 3
+    retry_count = 0
+    base_delay = 30
+    
+    while retry_count < max_retries:
+        try:
+            # Method 1: youtube-transcript-api
+            transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+            full_transcript = " ".join([item['text'] for item in transcript_data])
+            return full_transcript
+            
+        except AttributeError:
+            # Try newer API method
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                
+                # Try to find English transcript first
+                try:
+                    transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+                    transcript_data = transcript.fetch()
+                except:
+                    # Use first available transcript or auto-generated
+                    available = list(transcript_list)
+                    if not available:
+                        raise NoTranscriptFound(video_id)
+                    
+                    transcript = available[0]
+                    transcript_data = transcript.fetch()
+                
+                full_transcript = " ".join([item['text'] for item in transcript_data])
+                return full_transcript
+                
+            except Exception as e:
+                raise Exception(f"Alternative method failed: {e}")
+                
+        except TranscriptsDisabled:
+            raise Exception("Transcripts are disabled for this video")
+        except NoTranscriptFound:
+            raise Exception("No transcript found for this video (may not have captions)")
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a rate limit error
+            if '429' in error_str or 'Too Many Requests' in error_str.lower():
+                retry_count += 1
+                if retry_count < max_retries:
+                    delay = base_delay * retry_count
+                    print(f"Rate limited (429), retrying in {delay}s (attempt {retry_count}/{max_retries})...", file=sys.stderr)
+                    import time
+                    time.sleep(delay)
+                    continue
+                else:
+                    print("Max retries reached, trying yt-dlp fallback...", file=sys.stderr)
+                    fallback_transcript = fetch_transcript_ytdlp(video_id)
+                    if fallback_transcript:
+                        return fallback_transcript
+                    raise Exception("Rate limited: All methods exhausted. Try again later or use VPN.")
+            
+            # For other errors (like XML parsing), try yt-dlp fallback immediately
+            print(f"Primary method failed ({error_str}), trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript
+            raise Exception(f"Error fetching transcript: {e}")
+    
+    raise Exception("Failed to fetch transcript after multiple retries")
+
+
+def clean_transcript(transcript_text):
+    """Clean transcript text"""
+    text = re.sub(r'<[^>]+>', '', transcript_text)
+    text = re.sub(r'&[^;]+;', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def extract_key_takeaways(transcript, count=5):
+    """Extract and generate actionable key takeaways from transcript"""
+    try:
+        import nltk
+        from nltk.tokenize import sent_tokenize, word_tokenize
+        from nltk.corpus import stopwords
+        
+        # Ensure NLTK data is available
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt', quiet=True)
+        
+        try:
+            nltk.data.find('tokenizers/punkt_tab')
+        except LookupError:
+            nltk.download('punkt_tab', quiet=True)
+        
+        try:
+            nltk.data.find('corpora/stopwords')
+        except LookupError:
+            nltk.download('stopwords', quiet=True)
+        
+        sentences = sent_tokenize(transcript)
+        if len(sentences) < 5:
+            return []
+        
+        # Keywords for different types of content
+        how_to_keywords = ['how to', 'way to', 'steps to', 'method', 'approach', 'technique', 'process']
+        tool_keywords = ['tool', 'feature', 'function', 'command', 'shortcut', 'option', 'setting', 'button']
+        concept_keywords = ['understand', 'concept', 'principle', 'idea', 'means', 'is called', 'known as']
+        tip_keywords = ['tip', 'trick', 'hint', 'advice', 'recommend', 'suggest', 'best', 'better']
+        warning_keywords = ['careful', 'avoid', 'don\'t', 'never', 'mistake', 'wrong', 'problem', 'error']
+        
+        stop_words = set(stopwords.words('english'))
+        
+        # Collect different types of insights
+        how_tos = []
+        tools_features = []
+        concepts = []
+        tips = []
+        warnings = []
+        
+        for sentence in sentences:
+            if len(sentence.split()) < 8 or len(sentence.split()) > 60:
+                continue
+            
+            sentence_lower = sentence.lower()
+            
+            # Skip meta sentences about the video itself
+            if any(phrase in sentence_lower for phrase in ['this video', 'this tutorial', 'i\'m going to show', 'we\'re going to cover']):
+                continue
+            
+            # Categorize sentences
+            if any(kw in sentence_lower for kw in how_to_keywords):
+                how_tos.append(sentence)
+            elif any(kw in sentence_lower for kw in tool_keywords):
+                tools_features.append(sentence)
+            elif any(kw in sentence_lower for kw in concept_keywords):
+                concepts.append(sentence)
+            elif any(kw in sentence_lower for kw in tip_keywords):
+                tips.append(sentence)
+            elif any(kw in sentence_lower for kw in warning_keywords):
+                warnings.append(sentence)
+        
+        # Score and select best from each category
+        def score_sentence(sentence):
+            words = word_tokenize(sentence.lower())
+            content_words = [w for w in words if w.isalnum() and w not in stop_words]
+            # Information density + length bonus (prefer medium-length sentences)
+            ideal_length = 20
+            length_score = 1 - abs(len(words) - ideal_length) / ideal_length * 0.5
+            return (len(content_words) / max(len(words), 1)) * length_score
+        
+        # Get best from each category
+        takeaways = []
+        categories = [
+            (tips, "TIP"),
+            (how_tos, "HOW-TO"),
+            (tools_features, "FEATURE"),
+            (warnings, "WARNING"),
+            (concepts, "CONCEPT")
+        ]
+        
+        for category_sentences, category_name in categories:
+            if category_sentences:
+                # Score and sort sentences in this category
+                scored = [(sent, score_sentence(sent)) for sent in category_sentences]
+                scored.sort(key=lambda x: x[1], reverse=True)
+                
+                # Take best sentence and make it actionable
+                best = scored[0][0]
+                
+                # Transform to actionable format based on category
+                if category_name == "TIP":
+                    # Make it actionable
+                    if 'you can' in best.lower():
+                        best = best.replace('You can', 'Try to').replace('you can', 'try to')
+                    elif not best.startswith(('Use', 'Try', 'Consider', 'Always', 'Remember')):
+                        best = "Remember: " + best
+                    best = "💡 " + best
+                elif category_name == "HOW-TO":
+                    # Make it instructional
+                    if 'how to' in best.lower():
+                        best = best.replace('how to', 'Learn how to')
+                    elif not any(best.startswith(x) for x in ['To ', 'Learn', 'Master']):
+                        best = "Learn to " + best[0].lower() + best[1:]
+                    best = "→ " + best
+                elif category_name == "FEATURE":
+                    # Highlight the feature/tool
+                    if not any(word in best.lower()[:20] for word in ['use', 'leverage', 'explore']):
+                        best = "Explore: " + best
+                    best = "🔧 " + best
+                elif category_name == "WARNING":
+                    # Make it a clear warning
+                    if not best.startswith(('Avoid', 'Don\'t', 'Never', 'Be careful')):
+                        best = "Be careful: " + best
+                    best = "⚠️ " + best
+                elif category_name == "CONCEPT":
+                    # Frame as learning point
+                    if not any(word in best.lower()[:20] for word in ['understand', 'learn', 'know']):
+                        best = "Understand: " + best
+                    best = "📚 " + best
+                
+                # Clean up common issues
+                best = best.replace('  ', ' ')
+                best = best.replace('..', '.')
+                
+                takeaways.append(best.strip())
+                
+                if len(takeaways) >= count:
+                    break
+        
+        # If we don't have enough categorized takeaways, add best general sentences
+        if len(takeaways) < count:
+            all_scored = [(sent, score_sentence(sent)) for sent in sentences 
+                         if len(sent.split()) >= 10 and len(sent.split()) <= 50 
+                         and not any(phrase in sent.lower() for phrase in ['this video', 'i\'m going', 'we\'re going'])]
+            all_scored.sort(key=lambda x: x[1], reverse=True)
+            
+            for sent, _ in all_scored:
+                if sent not in takeaways:
+                    takeaways.append(sent)
+                    if len(takeaways) >= count:
+                        break
+        
+        return takeaways[:count]
+        
+    except Exception as e:
+        print(f"Warning: Could not extract key takeaways: {e}", file=sys.stderr)
+        return []
+
+
+def extract_sections(transcript, max_sections=6):
+    """Extract main sections/topics from transcript"""
+    try:
+        import nltk
+        from nltk.tokenize import sent_tokenize
+        
+        sentences = sent_tokenize(transcript)
+        if len(sentences) < 10:
+            return [("Main Content", transcript)]
+        
+        # Split into roughly equal chunks
+        chunk_size = max(len(sentences) // max_sections, 5)
+        sections = []
+        
+        for i in range(0, len(sentences), chunk_size):
+            chunk_sentences = sentences[i:i+chunk_size]
+            chunk_text = ' '.join(chunk_sentences)
+            
+            # Generate section title from first meaningful sentence
+            title = chunk_sentences[0]
+            # Simplify title
+            title = title[:60].strip()
+            if len(title) == 60:
+                title = title.rsplit(' ', 1)[0] + '...'
+            
+            sections.append((title, chunk_text))
+            
+            if len(sections) >= max_sections:
+                break
+        
+        return sections
+        
+    except Exception as e:
+        print(f"Warning: Could not extract sections: {e}", file=sys.stderr)
+        return [("Main Content", transcript)]
+
+
+def summarize_transcript(transcript, word_count=150):
+    """Create a proper executive summary that captures main themes and key points"""
+    words = transcript.split()
+    
+    if len(words) <= word_count:
+        return transcript
+    
+    # Try intelligent summarization first
+    try:
+        import nltk
+        from nltk.tokenize import sent_tokenize, word_tokenize
+        from nltk.corpus import stopwords
+        
+        # Ensure NLTK data is available
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt', quiet=True)
+        
+        try:
+            nltk.data.find('tokenizers/punkt_tab')
+        except LookupError:
+            nltk.download('punkt_tab', quiet=True)
+        
+        try:
+            nltk.data.find('corpora/stopwords')
+        except LookupError:
+            nltk.download('stopwords', quiet=True)
+        
+        sentences = sent_tokenize(transcript)
+        if len(sentences) <= 3:
+            return transcript
+        
+        # Group sentences into thematic clusters
+        # Keywords that indicate different aspects of content
+        intro_keywords = ['introduce', 'welcome', 'today', 'going to cover', 'learn', 'tutorial about']
+        main_concept_keywords = ['important', 'key', 'main', 'essential', 'fundamental', 'core', 'critical']
+        feature_keywords = ['feature', 'tool', 'function', 'capability', 'option', 'setting']
+        process_keywords = ['step', 'process', 'workflow', 'how to', 'procedure', 'method']
+        benefit_keywords = ['benefit', 'advantage', 'help', 'improve', 'enable', 'allow', 'make it']
+        example_keywords = ['example', 'instance', 'demonstrate', 'show', 'such as', 'for instance']
+        
+        stop_words = set(stopwords.words('english'))
+        
+        # Categorize and score sentences
+        intro_sentences = []
+        concept_sentences = []
+        feature_sentences = []
+        process_sentences = []
+        benefit_sentences = []
+        example_sentences = []
+        
+        for sentence in sentences:
+            if len(sentence.split()) < 10 or len(sentence.split()) > 60:
+                continue
+            
+            sentence_lower = sentence.lower()
+            
+            # Skip pure filler sentences
+            if sentence_lower.startswith(('okay', 'so okay', 'alright', 'um')):
+                continue
+            
+            # Skip meta-commentary about the video
+            if 'this video' in sentence_lower and 'going to' in sentence_lower:
+                if any(kw in sentence_lower for kw in intro_keywords):
+                    intro_sentences.append(sentence)
+                continue
+            
+            # Categorize based on content type
+            if any(kw in sentence_lower for kw in main_concept_keywords):
+                concept_sentences.append(sentence)
+            elif any(kw in sentence_lower for kw in feature_keywords):
+                feature_sentences.append(sentence)
+            elif any(kw in sentence_lower for kw in process_keywords):
+                process_sentences.append(sentence)
+            elif any(kw in sentence_lower for kw in benefit_keywords):
+                benefit_sentences.append(sentence)
+            elif any(kw in sentence_lower for kw in example_keywords):
+                example_sentences.append(sentence)
+        
+        # Score sentences by information density
+        def score_by_density(sentence):
+            words = word_tokenize(sentence.lower())
+            content_words = [w for w in words if w.isalnum() and w not in stop_words and len(w) > 2]
+            return len(content_words) / max(len(words), 1)
+        
+        # Build summary by taking best from each category
+        summary_parts = []
+        
+        # Start with best intro if available
+        if intro_sentences:
+            intro_sentences.sort(key=score_by_density, reverse=True)
+            best_intro = intro_sentences[0]
+            # Clean up the intro
+            best_intro = best_intro.replace('This video is going to cover', 'This covers')
+            best_intro = best_intro.replace('going to be', 'is')
+            summary_parts.append(best_intro)
+        
+        # Add main concepts (most important)
+        if concept_sentences:
+            concept_sentences.sort(key=score_by_density, reverse=True)
+            for sent in concept_sentences[:2]:  # Take top 2 concept sentences
+                if len(' '.join(summary_parts).split()) + len(sent.split()) <= word_count:
+                    summary_parts.append(sent)
+        
+        # Add key features or tools
+        if feature_sentences:
+            feature_sentences.sort(key=score_by_density, reverse=True)
+            for sent in feature_sentences[:2]:
+                if len(' '.join(summary_parts).split()) + len(sent.split()) <= word_count:
+                    summary_parts.append(sent)
+        
+        # Add process/workflow information
+        if process_sentences:
+            process_sentences.sort(key=score_by_density, reverse=True)
+            for sent in process_sentences[:1]:
+                if len(' '.join(summary_parts).split()) + len(sent.split()) <= word_count:
+                    summary_parts.append(sent)
+        
+        # Add benefits if space allows
+        if benefit_sentences:
+            benefit_sentences.sort(key=score_by_density, reverse=True)
+            for sent in benefit_sentences[:1]:
+                if len(' '.join(summary_parts).split()) + len(sent.split()) <= word_count:
+                    summary_parts.append(sent)
+        
+        # If we still don't have enough content, add highest scoring general sentences
+        if len(summary_parts) < 3:
+            all_sentences = [s for s in sentences 
+                           if len(s.split()) >= 10 and len(s.split()) <= 50
+                           and not s.lower().startswith(('okay', 'so', 'um', 'uh'))
+                           and 'going to' not in s.lower()[:30]]
+            all_sentences.sort(key=score_by_density, reverse=True)
+            
+            for sent in all_sentences:
+                if sent not in summary_parts:
+                    if len(' '.join(summary_parts).split()) + len(sent.split()) <= word_count:
+                        summary_parts.append(sent)
+                        if len(summary_parts) >= 5:
+                            break
+        
+        if summary_parts:
+            # Clean up the summary
+            summary = ' '.join(summary_parts)
+            
+            # Remove redundant phrases
+            summary = summary.replace('I\'m going to', 'I will')
+            summary = summary.replace('We\'re going to', 'We will')
+            summary = summary.replace('You\'re going to', 'You will')
+            summary = summary.replace('going to be', 'is')
+            summary = summary.replace('kind of', '')
+            summary = summary.replace('  ', ' ')
+            
+            return summary.strip()
+        
+        # If all else fails, use fallback
+        raise Exception("Could not generate meaningful summary")
+        
+    except Exception as e:
+        # Fallback to simple extraction
+        pass
+    
+    # Simple fallback - take beginning of transcript
+    summary_words = words[:word_count]
+    for i in range(word_count - 1, max(word_count - 20, 0), -1):
+        if summary_words[i].endswith(('.', '!', '?')):
+            summary_words = summary_words[:i+1]
+            break
+    
+    summary = ' '.join(summary_words)
+    return summary + '...' if not summary.endswith(('.', '!', '?')) else summary
+
+
+def _paragraphize(transcript_text, max_words_per_paragraph=120):
+    """Split transcript into readable paragraphs by sentences with a soft word cap."""
+    try:
+        import nltk
+        from nltk.tokenize import sent_tokenize
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt', quiet=True)
+        try:
+            nltk.data.find('tokenizers/punkt_tab')
+        except LookupError:
+            nltk.download('punkt_tab', quiet=True)
+        sentences = sent_tokenize(transcript_text)
+    except Exception:
+        sentences = re.split(r'(?<=[.!?])\s+', transcript_text)
+
+    paragraphs = []
+    current = []
+    word_count = 0
+    for s in sentences:
+        w = len(s.split())
+        if word_count + w > max_words_per_paragraph and current:
+            paragraphs.append(' '.join(current).strip())
+            current = [s]
+            word_count = w
+        else:
+            current.append(s)
+            word_count += w
+    if current:
+        paragraphs.append(' '.join(current).strip())
+    return '\n\n'.join(paragraphs)
+
+
+def format_markdown_document(title, source_url, summary, takeaways, full_text, 
+                           content_label="Transcript", source_id=None, next_steps=None):
+    """
+    Format a comprehensive markdown document for video or article.
+    
+    Args:
+        title: Content title
+        source_url: Original URL
+        summary: Executive summary
+        takeaways: List of key takeaways
+        full_text: Full transcript or article text
+        content_label: "Transcript" or "Article"
+        source_id: Video ID (optional, for videos only)
+        next_steps: Recommended next steps (optional)
+    """
+    doc = []
+    
+    # Title
+    doc.append(f"# {title}\n")
+    doc.append(f"**Source:** {source_url}\n")
+    
+    # Video ID or content type
+    if source_id:
+        doc.append(f"**Video ID:** {source_id}\n")
+    else:
+        doc.append(f"**Type:** {content_label}\n")
+    
+    doc.append(f"**Generated:** {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    doc.append("\n---\n")
+    
+    # Key Takeaways
+    if takeaways:
+        doc.append("\n## 🎯 Key Takeaways\n")
+        for i, takeaway in enumerate(takeaways, 1):
+            doc.append(f"{i}. **{takeaway.strip()}**\n")
+        doc.append("\n---\n")
+    
+    # Summary
+    doc.append("\n## 📝 Executive Summary\n")
+    doc.append(f"{summary}\n")
+    doc.append("\n---\n")
+    
+    # Next Steps (if AI generated them)
+    if next_steps:
+        doc.append("\n## 🚀 Recommended Next Steps\n")
+        for i, step in enumerate(next_steps, 1):
+            doc.append(f"- [ ] {step.strip()}\n")
+        doc.append("\n---\n")
+    
+    # Full content
+    doc.append(f"\n## 📄 Full {content_label}\n")
+    doc.append(f"{_paragraphize(full_text)}\n")
+    
+    return '\n'.join(doc)
+
+
+def get_unique_filepath(base_dir, base_name, extension):
+    """Generate unique filepath, adding numeric suffix if file exists"""
+    filepath = base_dir / f"{base_name}.{extension}"
+    if not filepath.exists():
+        return filepath
+    
+    # Add numeric suffix
+    counter = 1
+    while True:
+        filepath = base_dir / f"{base_name}_{counter}.{extension}"
+        if not filepath.exists():
+            return filepath
+        counter += 1
+
+
+def handle_youtube_command(args):
+    """Handle /youtube command"""
+    # Parse arguments
+    parser = argparse.ArgumentParser(
+        prog='/youtube',
+        description='Summarize YouTube videos and articles'
+    )
+    parser.add_argument('query', help='YouTube URL, article URL, or search query')
+    parser.add_argument('--words', type=int, default=500,
+                       help='Target word count for summary (default: 500)')
+    parser.add_argument('--format', choices=['md', 'txt'], default='md',
+                       help='Output format: md (markdown, default) or txt (separate files)')
+    parser.add_argument('--no-takeaways', action='store_true',
+                       help='Skip key takeaways extraction')
+    parser.add_argument('--takeaways-count', type=int, default=5,
+                       help='Number of key takeaways to extract (default: 5)')
+    
+    # AI provider options
+    if AI_AVAILABLE:
+        parser.add_argument('--ai-provider', choices=['openai', 'anthropic', 'deepseek', 'ollama', 'none'],
+                           default='ollama',
+                           help='AI provider for enhanced summarization (default: ollama)')
+        parser.add_argument('--ai-model', type=str,
+                           help='Specific AI model to use (e.g., gpt-4, claude-3-sonnet, deepseek-chat)')
+    else:
+        parser.add_argument('--ai-provider', choices=['none'], default='none',
+                           help='AI summarization not available (install requirements_ai.txt)')
+    
+    try:
+        parsed_args = parser.parse_args(args)
+    except SystemExit:
+        return 1
+    
+    query = parsed_args.query
+    word_count = parsed_args.words
+    output_format = parsed_args.format
+    skip_takeaways = parsed_args.no_takeaways
+    takeaways_count = parsed_args.takeaways_count
+    
+    # AI provider settings
+    ai_provider = getattr(parsed_args, 'ai_provider', 'none')
+    ai_model = getattr(parsed_args, 'ai_model', None)
+    
+    # Initialize AI summarizer if available and requested
+    ai_summarizer = None
+    if AI_AVAILABLE and ai_provider != 'none':
+        try:
+            ai_summarizer = AITranscriptSummarizer(provider=ai_provider, model=ai_model)
+            if ai_summarizer.is_available():
+                print(f"✓ Using {ai_provider} AI (model: {ai_summarizer.model}) for enhanced summarization")
+            else:
+                print(f"⚠ {ai_provider} not configured, falling back to extraction method")
+                ai_summarizer = None
+        except Exception as e:
+            print(f"⚠ Could not initialize AI: {e}")
+            ai_summarizer = None
+    
+    # Ensure output directory exists
+    output_dir = Path.home() / "Documents" / "YouTube videos"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Processing: {query}\n")
+    
+    # Detect content type
+    content_type, identifier = detect_content_type(query)
+    
+    if content_type == ContentType.ARTICLE:
+        print(f"Detected content type: article")
+        print(f"Fetching article from: {identifier}...\n")
+    else:
+        print(f"Detected content type: video")
+    
+    # Process based on content type
+    content_text = None
+    content_title = None
+    source_url = None
+    source_id = None
+    content_label = "Transcript"
+    
+    if content_type == ContentType.ARTICLE:
+        # Article pipeline
+        try:
+            content_title, content_text = fetch_article_content(identifier)
+            source_url = identifier
+            content_label = "Article"
+            
+            word_count_actual = len(content_text.split())
+            print(f"✓ Article fetched ({len(content_text)} characters, {word_count_actual} words)")
+            print(f"Title: {content_title}\n")
+            
+        except (ConnectionError, ValueError, ImportError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Error fetching article: {e}", file=sys.stderr)
+            return 1
+    
+    else:
+        # Video pipeline (existing logic)
+        video_id = None
+        video_title = None
+        
+        if is_url(identifier) or re.match(r'^[a-zA-Z0-9_-]{11}$', identifier):
+            # Extract video ID from URL or use directly
+            try:
+                video_id = extract_video_id(identifier)
+                print(f"Video ID: {video_id}")
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+        else:
+            # Search for video
+            print(f"Searching YouTube for: '{identifier}'...")
+            video_data = search_youtube(identifier)
+            
+            if not video_data:
+                print("Error: No results found", file=sys.stderr)
+                return 1
+            
+            video_id = video_data['id']
+            video_title = video_data['title']
+            
+            print(f"Found: {video_title}")
+            print(f"URL: {video_data['url']}")
+            print(f"Video ID: {video_id}\n")
+        
+        # Fetch transcript
+        print("Fetching transcript...")
+        try:
+            transcript = fetch_transcript(video_id)
+            transcript = clean_transcript(transcript)
+            
+            if len(transcript) < 50:
+                print("Error: Transcript is too short or empty", file=sys.stderr)
+                return 1
+            
+            print(f"✓ Transcript fetched ({len(transcript)} characters, {len(transcript.split())} words)")
+            
+            content_text = transcript
+            content_title = video_title
+            source_id = video_id
+            source_url = f"https://www.youtube.com/watch?v={video_id}"
+            content_label = "Transcript"
+            
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+    
+    # Generate summary
+    print(f"Generating summary (target: {word_count} words)...")
+    
+    # Use AI if available, otherwise fallback to extraction
+    if ai_summarizer:
+        summary = ai_summarizer.generate_executive_summary(content_text, content_title or "Content", word_count)
+        if not summary:
+            print("⚠ AI summary generation failed, using extraction method")
+            summary = summarize_transcript(content_text, word_count)
+    else:
+        summary = summarize_transcript(content_text, word_count)
+    
+    summary_word_count = len(summary.split())
+    print(f"✓ Summary generated ({summary_word_count} words)")
+    
+    # Extract key takeaways
+    takeaways = []
+    if not skip_takeaways:
+        print(f"Extracting key takeaways (target: {takeaways_count})...")
+        
+        # Use AI if available
+        if ai_summarizer:
+            takeaways = ai_summarizer.generate_key_takeaways(content_text, content_title or "Content", takeaways_count)
+            if takeaways:
+                # Format with emojis for visual appeal
+                formatted_takeaways = []
+                for i, takeaway in enumerate(takeaways):
+                    if i == 0:
+                        formatted_takeaways.append(f"🎯 {takeaway}")
+                    elif i == 1:
+                        formatted_takeaways.append(f"💡 {takeaway}")
+                    elif i == 2:
+                        formatted_takeaways.append(f"🚀 {takeaway}")
+                    elif i == 3:
+                        formatted_takeaways.append(f"🔧 {takeaway}")
+                    else:
+                        formatted_takeaways.append(f"✨ {takeaway}")
+                takeaways = formatted_takeaways
+            else:
+                print("⚠ AI takeaway generation failed, using extraction method")
+                takeaways = extract_key_takeaways(content_text, takeaways_count)
+        else:
+            takeaways = extract_key_takeaways(content_text, takeaways_count)
+        
+        if takeaways:
+            print(f"✓ Extracted {len(takeaways)} key takeaways")
+        else:
+            print("⚠ No key takeaways extracted")
+    
+    # Generate filename slug
+    if content_title:
+        slug = slugify(content_title)
+    elif source_id:
+        # For videos without title, try to fetch using yt-dlp
+        try:
+            cmd = ['python3', '-m', 'yt_dlp', '--print', 'title', '--skip-download',
+                   f'https://www.youtube.com/watch?v={source_id}']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                content_title = result.stdout.strip()
+                slug = slugify(content_title)
+            else:
+                slug = source_id
+                content_title = f"Video {source_id}"
+        except:
+            slug = source_id
+            content_title = f"Video {source_id}"
+    else:
+        # For articles without title
+        slug = "article"
+        content_title = "Article"
+    
+    # Generate next steps if AI is available
+    next_steps = []
+    if ai_summarizer and takeaways:
+        print("Generating recommended next steps...")
+        next_steps = ai_summarizer.generate_next_steps(content_text, content_title, takeaways)
+        if next_steps:
+            print(f"✓ Generated {len(next_steps)} next steps")
+    
+    # Save files based on format
+    if output_format == 'md':
+        # Save as single markdown file
+        markdown_content = format_markdown_document(
+            title=content_title,
+            source_url=source_url,
+            summary=summary,
+            takeaways=takeaways,
+            full_text=content_text,
+            content_label=content_label,
+            source_id=source_id,
+            next_steps=next_steps
+        )
+        md_file = get_unique_filepath(output_dir, slug, "md")
+        
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+        print(f"✓ Markdown document saved: {md_file}")
+        
+    else:
+        # Save as separate text files (legacy format)
+        content_file = get_unique_filepath(output_dir, slug, f"{content_label.lower()}.txt")
+        summary_file = get_unique_filepath(output_dir, slug, "summary.txt")
+        
+        with open(content_file, 'w', encoding='utf-8') as f:
+            f.write(content_text)
+        print(f"✓ {content_label} saved: {content_file}")
+        
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            f.write(summary)
+        print(f"✓ Summary saved: {summary_file}")
+    
+    # Display key takeaways and summary
+    print("\n" + "="*70)
+    
+    if takeaways:
+        print("KEY TAKEAWAYS")
+        print("="*70)
+        for i, takeaway in enumerate(takeaways, 1):
+            print(f"{i}. {takeaway}")
+        print("\n" + "="*70)
+    
+    print("SUMMARY")
+    print("="*70)
+    print(summary)
+    print("="*70)
+    
+    # Statistics
+    content_words = len(content_text.split())
+    reduction = round((1 - summary_word_count/content_words) * 100, 1)
+    print(f"\nStatistics:")
+    print(f"  Original: {content_words} words")
+    print(f"  Summary: {summary_word_count} words")
+    print(f"  Reduction: {reduction}%")
+    if takeaways:
+        print(f"  Key Takeaways: {len(takeaways)}")
+    
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(handle_youtube_command(sys.argv[1:]))

@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Environment variables (IMPORTANT - contains API keys)
+.env
+*.env
+!.env.example
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+nohup.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Cache directories
+.cache/
+*.cache
+__pycache__/
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Optional: Uncomment if you don't want to sync generated summaries
+# output/
+# Documents/
+
+# Whisper models (large files, re-download on new machine)
+*.pt
+models/
+
+# Audio cache (re-download as needed)
+.cache/podcast_transcripts/
