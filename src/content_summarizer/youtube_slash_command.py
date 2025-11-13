@@ -298,10 +298,24 @@ def fetch_article_content(url):
     
     # Validate minimum content length
     if len(full_text) < 200:
-        raise ValueError(
-            f"Article content too short ({len(full_text)} chars, minimum 200). "
-            "URL may not contain readable article content."
-        )
+        # Check if it's a known difficult site
+        domain = urlparse(url).netloc.lower()
+        difficult_sites = ['cnn.com', 'nytimes.com', 'wsj.com', 'washingtonpost.com', 'ft.com']
+        
+        error_msg = f"Article content too short ({len(full_text)} chars, minimum 200). "
+        
+        if any(site in domain for site in difficult_sites):
+            error_msg += (
+                f"\n\n⚠️  {domain} has strong bot protection that blocks automated scrapers.\n"
+                "\n💡 Workarounds:"
+                "\n   1. Copy the article text and use the 'Paste Text' tab instead"
+                "\n   2. Try a reader mode URL (some sites offer simplified versions)"
+                "\n   3. Use browser extensions that can extract clean article text"
+            )
+        else:
+            error_msg += "URL may not contain readable article content."
+        
+        raise ValueError(error_msg)
     
     return (title, full_text)
 
