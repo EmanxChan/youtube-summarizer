@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys
 import os
 import re
 import subprocess
@@ -7,10 +8,13 @@ import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Add src directory to Python path for module imports
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
 from content_summarizer.style import apply_dark_mode
 
 # Load environment variables from .env file (project root)
-ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
 
 st.set_page_config(page_title="Content Summarizer", page_icon="📚", layout="wide")
