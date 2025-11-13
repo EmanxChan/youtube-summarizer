@@ -37,6 +37,8 @@ class AITranscriptSummarizer:
             self._init_anthropic()
         elif self.provider == "ollama":
             self._init_ollama()
+        elif self.provider == "groq":
+            self._init_groq()
         elif self.provider != "none":
             raise ValueError(f"Unknown provider: {provider}")
     
@@ -133,9 +135,38 @@ class AITranscriptSummarizer:
         except ImportError:
             raise ImportError("Requests library not installed. Run: pip install requests")
     
+    def _init_groq(self):
+        """Initialize Groq client (OpenAI-compatible API)"""
+        try:
+            import openai
+            
+            # Try to get API key from environment or config
+            self.api_key = os.getenv('GROQ_API_KEY')
+            
+            if not self.api_key:
+                # Try to load from config file
+                config_path = Path.home() / '.youtube_summarizer' / 'config.json'
+                if config_path.exists():
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                        self.api_key = config.get('groq_api_key')
+            
+            if not self.api_key:
+                raise ValueError("Groq API key not found. Set GROQ_API_KEY environment variable.")
+            
+            # Groq uses OpenAI-compatible API with custom base URL
+            self.client = openai.OpenAI(
+                api_key=self.api_key,
+                base_url="https://api.groq.com/openai/v1"
+            )
+            self.model = self.model or "llama-3.1-8b-instant"  # Default to fast model
+            
+        except ImportError:
+            raise ImportError("OpenAI library not installed. Run: pip install openai")
+    
     def count_tokens(self, text: str) -> int:
         """Count tokens in text for rate limiting"""
-        if self.provider in ["openai", "deepseek"]:
+        if self.provider in ["openai", "deepseek", "groq"]:
             try:
                 encoder = tiktoken.encoding_for_model(self.model)
             except:
@@ -218,7 +249,7 @@ Now generate {count} insights that match this EXCELLENT quality standard. Each i
 Return ONLY the {count} insights, one per line, without numbers or bullet points."""
 
         try:
-            if self.provider in ["openai", "deepseek"]:
+            if self.provider in ["openai", "deepseek", "groq"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -324,7 +355,7 @@ CRITICAL REQUIREMENTS:
 Return ONLY the summary text with paragraph breaks, no headers or labels."""
 
         try:
-            if self.provider in ["openai", "deepseek"]:
+            if self.provider in ["openai", "deepseek", "groq"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -396,7 +427,7 @@ Examples:
 Return ONLY the 3 next steps, one per line."""
 
         try:
-            if self.provider in ["openai", "deepseek"]:
+            if self.provider in ["openai", "deepseek", "groq"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
