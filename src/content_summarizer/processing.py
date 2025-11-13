@@ -5,6 +5,7 @@ This module provides a single entry point for processing different types of cont
 """
 
 import os
+import sys
 import re
 import subprocess
 import tempfile
@@ -56,7 +57,7 @@ def _process_url(url: str, words: int, api_key: str, script_module: str) -> Dict
     env['GROQ_API_KEY'] = api_key
     
     cmd = [
-        "python3", "-m", script_module, url,
+        sys.executable, "-m", script_module, url,
         "--format", "md",
         "--words", str(words),
         "--ai-provider", os.getenv("AI_PROVIDER", "groq"),

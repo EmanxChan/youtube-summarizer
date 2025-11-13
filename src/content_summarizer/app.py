@@ -277,8 +277,9 @@ def process_url(url, words):
         # Use direct script path instead of -m flag to avoid module import issues
         script_path = ROOT / "src" / "content_summarizer" / "youtube_slash_command.py"
         
+        # Use sys.executable to ensure subprocess uses same Python interpreter with installed packages
         cmd = [
-            "python3", str(script_path), url,
+            sys.executable, str(script_path), url,
             "--format", "md",
             "--words", str(words),
             "--ai-provider", os.getenv("AI_PROVIDER", "groq"),
@@ -619,7 +620,7 @@ except Exception as e:
 '''
         
         result = subprocess.run(
-            ['python3', '-c', transcribe_script],
+            [sys.executable, '-c', transcribe_script],
             capture_output=True,
             text=True,
             env=env,
@@ -776,7 +777,7 @@ except Exception as e:
 '''
         
         result = subprocess.run(
-            ['python3', '-c', summarize_script],
+            [sys.executable, '-c', summarize_script],
             capture_output=True,
             text=True,
             env=env,

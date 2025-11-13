@@ -20,7 +20,7 @@ def get_youtube_transcript_ytdlp(video_url):
     try:
         # Use yt-dlp to get transcript
         cmd = [
-            'python3', '-m', 'yt_dlp',
+            sys.executable, '-m', 'yt_dlp',
             '--write-auto-sub',
             '--sub-langs', 'en,en-US',
             '--skip-download',

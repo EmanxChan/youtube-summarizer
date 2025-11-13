@@ -180,13 +180,13 @@ def fetch_article_content(url):
         )
     
     try:
-        # Try cloudscraper first for Cloudflare-protected sites
+        # Try cloudscraper first for Cloudflare-protected sites (optional dependency)
         try:
             import cloudscraper
             scraper = cloudscraper.create_scraper()
             response = scraper.get(url, timeout=15, allow_redirects=True)
             response.raise_for_status()
-        except ImportError:
+        except (ImportError, Exception):
             # Fallback to regular requests with enhanced headers
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -872,7 +872,7 @@ def find_youtube_mirror(podcast_title, episode_title=None):
         
         # Search YouTube
         cmd = [
-            'python3', '-m', 'yt_dlp',
+            sys.executable, '-m', 'yt_dlp',
             f'ytsearch1:{search_query}',
             '--print-json',
             '--skip-download'
@@ -1031,7 +1031,7 @@ def download_podcast_audio(audio_url, output_path):
     """
     try:
         cmd = [
-            'python3', '-m', 'yt_dlp',
+            sys.executable, '-m', 'yt_dlp',
             audio_url,
             '-o', str(output_path),
             '--extract-audio',
@@ -1068,7 +1068,7 @@ def download_twitter_video(twitter_url):
         print(f"  📥 Downloading Twitter video...")
         
         cmd = [
-            'python3', '-m', 'yt_dlp',
+            sys.executable, '-m', 'yt_dlp',
             twitter_url,
             '-o', output_template,
             '--format', 'best[ext=mp4]/best',  # Prefer MP4
@@ -1088,7 +1088,7 @@ def download_twitter_video(twitter_url):
                 
                 # Try to get title
                 title_cmd = [
-                    'python3', '-m', 'yt_dlp',
+                    sys.executable, '-m', 'yt_dlp',
                     twitter_url,
                     '--get-title',
                     '--no-warnings'
@@ -1803,7 +1803,7 @@ def search_youtube(query):
     """Search YouTube using yt-dlp and return video metadata"""
     try:
         cmd = [
-            'python3', '-m', 'yt_dlp',
+            sys.executable, '-m', 'yt_dlp',
             f'ytsearch1:{query}',
             '--print-json',
             '--skip-download'
@@ -1853,7 +1853,7 @@ def fetch_transcript_ytdlp(video_id):
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             cmd = [
-                'python3', '-m', 'yt_dlp',
+                sys.executable, '-m', 'yt_dlp',
                 f'https://www.youtube.com/watch?v={video_id}',
                 '--write-auto-subs',
                 '--write-subs',
@@ -2768,7 +2768,7 @@ def handle_youtube_command(args):
     elif source_id:
         # For videos without title, try to fetch using yt-dlp
         try:
-            cmd = ['python3', '-m', 'yt_dlp', '--print', 'title', '--skip-download',
+            cmd = [sys.executable, '-m', 'yt_dlp', '--print', 'title', '--skip-download',
                    f'https://www.youtube.com/watch?v={source_id}']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
