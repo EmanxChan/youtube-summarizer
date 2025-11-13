@@ -139,62 +139,6 @@ class ListenNotesClient:
             print(f"  ⚠️ Listen Notes podcast lookup error: {e}")
             return []
     
-    def search_episodes(self, podcast_name: str, keyword: str, limit: int = 10) -> list:
-        """
-        Search for specific episodes within a podcast by keyword.
-        Searches ALL episodes, not just recent ones.
-        
-        Args:
-            podcast_name: Name of the podcast to search within
-            keyword: Keyword/topic to search for in episode titles
-            limit: Max results to return (default 10)
-            
-        Returns:
-            List of episode dicts matching the search
-        """
-        try:
-            # Build search query: podcast name + keyword
-            search_query = f"{podcast_name} {keyword}"
-            
-            response = self._api_request(
-                'GET',
-                '/search',
-                params={
-                    'q': search_query,
-                    'type': 'episode',
-                    'page_size': limit,
-                    'sort_by_date': 1  # Sort by most recent
-                }
-            )
-            
-            results = response.get('results', [])
-            episodes = []
-            
-            for result in results:
-                # Filter to ensure it's from the correct podcast
-                podcast_title = result.get('podcast', {}).get('title_original', '')
-                
-                # Fuzzy match podcast name (case-insensitive, partial match)
-                if podcast_name.lower() in podcast_title.lower():
-                    episodes.append({
-                        'audio_url': result.get('audio'),
-                        'title': result.get('title_original', result.get('title')),
-                        'description': result.get('description_original', result.get('description', '')),
-                        'duration': result.get('audio_length_sec', 0),
-                        'podcast_title': podcast_title,
-                        'podcast_id': result.get('podcast', {}).get('id', ''),
-                        'episode_id': result.get('id', ''),
-                        'pub_date': result.get('pub_date_ms', 0),
-                        'thumbnail': result.get('thumbnail') or result.get('image'),
-                        'source': 'listen_notes_episode_search'
-                    })
-            
-            return episodes
-            
-        except Exception as e:
-            print(f"  ⚠️ Listen Notes episode search error: {e}")
-            return []
-    
     def _lookup_by_apple_id(self, show_id: str, episode_id: str) -> Optional[Dict]:
         """Look up episode by Apple Podcasts IDs"""
         # Listen Notes doesn't have direct Apple ID lookup, use search

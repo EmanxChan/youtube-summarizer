@@ -37,6 +37,10 @@ class AITranscriptSummarizer:
             self._init_anthropic()
         elif self.provider == "ollama":
             self._init_ollama()
+        elif self.provider == "openrouter":
+            self._init_openrouter()
+        elif self.provider == "groq":
+            self._init_groq()
         elif self.provider != "none":
             raise ValueError(f"Unknown provider: {provider}")
     
@@ -122,7 +126,7 @@ class AITranscriptSummarizer:
         try:
             import requests
             self.base_url = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-            self.model = self.model or "llama3.2:3b"  # Default to Llama 3.2 for testing
+            self.model = self.model or "qwen2.5:7b-instruct-q4_K_M"  # Default to Qwen 2.5 7B (efficient multilingual)
             # Test connection
             try:
                 response = requests.get(f"{self.base_url}/api/tags", timeout=2)
@@ -133,9 +137,68 @@ class AITranscriptSummarizer:
         except ImportError:
             raise ImportError("Requests library not installed. Run: pip install requests")
     
+    def _init_openrouter(self):
+        """Initialize OpenRouter client (OpenAI-compatible)"""
+        try:
+            import openai
+            
+            # Try to get API key from environment or config
+            self.api_key = os.getenv('OPENROUTER_API_KEY')
+            
+            if not self.api_key:
+                # Try to load from config file
+                config_path = Path.home() / '.youtube_summarizer' / 'config.json'
+                if config_path.exists():
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                        self.api_key = config.get('openrouter_api_key')
+            
+            if not self.api_key:
+                raise ValueError("OpenRouter API key not found. Set OPENROUTER_API_KEY environment variable.")
+            
+            # OpenRouter uses OpenAI-compatible API with custom base URL
+            self.client = openai.OpenAI(
+                api_key=self.api_key,
+                base_url="https://openrouter.ai/api/v1"
+            )
+            self.model = self.model or "deepseek/deepseek-chat-v3.1:free"  # Default to DeepSeek V3.1 free
+            
+        except ImportError:
+            raise ImportError("OpenAI library not installed. Run: pip install openai")
+    
+    def _init_groq(self):
+        """Initialize Groq client (OpenAI-compatible, ultra-fast inference)"""
+        try:
+            import openai
+            
+            # Try to get API key from environment or config
+            self.api_key = os.getenv('GROQ_API_KEY')
+            
+            if not self.api_key:
+                # Try to load from config file
+                config_path = Path.home() / '.youtube_summarizer' / 'config.json'
+                if config_path.exists():
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                        self.api_key = config.get('groq_api_key')
+            
+            if not self.api_key:
+                raise ValueError("Groq API key not found. Set GROQ_API_KEY environment variable.")
+            
+            # Groq uses OpenAI-compatible API with custom base URL
+            self.client = openai.OpenAI(
+                api_key=self.api_key,
+                base_url="https://api.groq.com/openai/v1"
+            )
+            # Default to Llama 3.3 70B for best quality
+            self.model = self.model or "llama-3.3-70b-versatile"
+            
+        except ImportError:
+            raise ImportError("OpenAI library not installed. Run: pip install openai")
+    
     def count_tokens(self, text: str) -> int:
         """Count tokens in text for rate limiting"""
-        if self.provider in ["openai", "deepseek"]:
+        if self.provider in ["openai", "deepseek", "openrouter", "groq"]:
             try:
                 encoder = tiktoken.encoding_for_model(self.model)
             except:
@@ -150,8 +213,11 @@ class AITranscriptSummarizer:
         """
         Generate high-level conceptual insights from transcript.
         
+        Extracts salient concepts, principles, and strategic implications
+        that reveal deeper understanding and enable informed decision-making.
+        
         Returns:
-            List of insight strings
+            List of insight strings (30-40 words each)
         """
         # Limit transcript to avoid token limits
         max_chars = 12000  # Roughly 3000 tokens
@@ -179,7 +245,7 @@ LENGTH: 30-40 words per insight (2-3 sentences)
 AVOID AT ALL COSTS:
 - Generic truisms ("X improves Y", "Using Z helps achieve better results")
 - Obvious statements anyone would know
-- Action verbs (Learn, Master, Implement, Use)
+- Action verbs (Learn, Master, Implement, Use, Configure)
 - Vague platitudes without specifics
 - Surface-level descriptions
 
@@ -189,44 +255,40 @@ Only include insights that pass this test.
 
 EXAMPLES OF EXCELLENT INSIGHTS:
 
-BAD (Generic):
-"Planning with AI is more efficient than jumping straight to coding for complex features."
+BAD (Generic, action-oriented):
+"Master keyboard shortcuts in Cursor to write code 3x faster than traditional IDEs"
 
-GOOD (Insightful):
+GOOD (Insightful, conceptual):
 "AI code assistants front-load cognitive work—requiring extensive upfront context through research strategies—because they lack the implicit codebase understanding developers build through daily immersion, creating a fundamental inversion where setup investment determines long-term leverage rather than immediate productivity."
 
 ---
 
-BAD (Generic):
-"Eight research strategies help an AI learn patterns and preferences in a codebase."
+BAD (Obvious):
+"Docker containers make deployment easier across different environments"
 
 GOOD (Insightful):
-"Multiple research strategies exist because no single approach captures both explicit patterns (what the code does) and implicit taste (how the team prefers to do it), requiring AI systems to triangulate understanding through complementary lenses much like anthropologists studying a culture through multiple methodologies."
+"Containerization solves the dependency hell problem by treating the entire runtime environment as immutable infrastructure-as-code, trading increased disk usage and build complexity for reproducibility guarantees that prevent 'works on my machine' failures in production."
 
 ---
 
-BAD (Generic):
-"Continually refining and expanding the AI's knowledge base improves its performance over time."
+BAD (Surface-level):
+"Using Cursor's AI features speeds up development"
 
 GOOD (Insightful):
-"AI code assistants demonstrate a compound learning curve where initial context-gathering creates diminishing returns on individual queries but exponential improvements in decision quality over time, inverting the typical tool learning curve where early investment yields immediate payoff."
-
----
-
-Now generate {count} insights that match this EXCELLENT quality standard. Each insight should be profound enough that an expert would pause and think "I hadn't considered it that way."
+"Cursor's dual-mode architecture—context-aware autocomplete for tactical edits versus chat-based planning for strategic refactors—reflects a deeper truth: AI assistance scales with problem scope differently than human intelligence, excelling at local optimization while requiring more scaffolding for global reasoning."
 
 Return ONLY the {count} insights, one per line, without numbers or bullet points."""
 
         try:
-            if self.provider in ["openai", "deepseek"]:
+            if self.provider in ["openai", "deepseek", "openrouter", "groq"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": "You are a world-class analyst who reveals profound insights and non-obvious patterns."},
+                        {"role": "system", "content": "You are a world-class analyst who extracts profound insights."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.6,
-                    max_tokens=800
+                    max_tokens=700
                 )
                 content = response.choices[0].message.content
                 
@@ -234,7 +296,7 @@ Return ONLY the {count} insights, one per line, without numbers or bullet points
                 response = self.client.messages.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=800,
+                    max_tokens=700,
                     temperature=0.6
                 )
                 content = response.content[0].text
@@ -293,38 +355,26 @@ Return ONLY the {count} insights, one per line, without numbers or bullet points
                         transcript[len(transcript)//2 - third//2:len(transcript)//2 + third//2] + \
                         " [...] " + transcript[-third:]
         
-        # Calculate words per paragraph for guidance
-        words_per_paragraph = word_count // 4
-        
         prompt = f"""You are an expert at creating executive summaries for educational and technical content.
 
 Video Title: {video_title}
 Transcript: {transcript}
 
-Create an executive summary that delivers AT LEAST {word_count} words in four cohesive paragraphs (approximately {words_per_paragraph} words per paragraph). Do not stop early; add detail until the minimum word count is reached.
+Create an executive summary of approximately {word_count} words that:
 
-Structure your summary with these four paragraphs:
+1. Opens with what this video teaches and why it matters (1-2 sentences)
+2. Explains the 3-4 main concepts or techniques covered
+3. Describes the practical applications and benefits
+4. Concludes with who would benefit most from this content
 
-1. **Introduction** (~{words_per_paragraph} words): Open with what this content teaches and why it matters. Provide context and the core value proposition.
+Write in clear, professional language. Focus on concepts and value, NOT on play-by-play actions.
+Do not mention "the video" or "the speaker" - write as if describing the topic directly.
+Make it informative enough that someone could decide whether to watch based on your summary.
 
-2. **Core Themes** (~{words_per_paragraph} words): Explain the 3-4 main concepts, techniques, or arguments covered. Add supporting details and examples to reach the target length.
-
-3. **Practical Applications** (~{words_per_paragraph} words): Describe the practical applications, benefits, and real-world implications. Include specific use cases or outcomes.
-
-4. **Closing Recommendation** (~{words_per_paragraph} words): Conclude with who would benefit most from this content and what they will gain. Summarize the key value.
-
-CRITICAL REQUIREMENTS:
-- Write AT LEAST {word_count} words total - do not stop short
-- Use four cohesive paragraphs with smooth transitions
-- Focus on concepts and value, NOT play-by-play actions
-- Do not mention "the video" or "the speaker" - write as if describing the topic directly
-- Use clear, professional language with sufficient detail to reach the word count
-- Make it informative enough that someone could decide whether to watch based on your summary
-
-Return ONLY the summary text with paragraph breaks, no headers or labels."""
+Return ONLY the summary text, no headers or labels."""
 
         try:
-            if self.provider in ["openai", "deepseek"]:
+            if self.provider in ["openai", "deepseek", "openrouter", "groq"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -396,7 +446,7 @@ Examples:
 Return ONLY the 3 next steps, one per line."""
 
         try:
-            if self.provider in ["openai", "deepseek"]:
+            if self.provider in ["openai", "deepseek", "openrouter", "groq"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],

@@ -48,6 +48,7 @@ class ContentType(Enum):
     ARTICLE = "article"
     PODCAST = "podcast"
     PODCAST_SEARCH = "podcast_search"
+    TWITTER_VIDEO = "twitter_video"
 
 
 class NLTKHelper:
@@ -107,11 +108,16 @@ def extract_video_id(url_or_id):
 
 def detect_content_type(query):
     """
-    Detect whether query is a YouTube video, article, podcast URL, or podcast search.
+    Detect whether query is a YouTube video, article, podcast URL, Twitter video, or podcast search.
     
     Returns:
-        tuple: (ContentType, identifier) where identifier is video_id, article_url, podcast_url, or search_query
+        tuple: (ContentType, identifier) where identifier is video_id, article_url, podcast_url, twitter_url, or search_query
     """
+    # Check for Twitter/X patterns
+    if "twitter.com" in query or "x.com" in query:
+        if "/status/" in query:
+            return (ContentType.TWITTER_VIDEO, query)
+    
     # Check for YouTube patterns
     if "youtube.com/watch" in query or "youtu.be/" in query:
         try:
@@ -174,21 +180,64 @@ def fetch_article_content(url):
         )
     
     try:
-        # Fetch with desktop user agent to avoid bot detection
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                         'AppleWebKit/537.36 (KHTML, like Gecko) '
-                         'Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        response.raise_for_status()
+        # Try cloudscraper first for Cloudflare-protected sites
+        try:
+            import cloudscraper
+            scraper = cloudscraper.create_scraper()
+            response = scraper.get(url, timeout=15, allow_redirects=True)
+            response.raise_for_status()
+        except ImportError:
+            # Fallback to regular requests with enhanced headers
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                             'AppleWebKit/537.36 (KHTML, like Gecko) '
+                             'Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+            }
+            
+            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+            response.raise_for_status()
         
     except requests.exceptions.Timeout:
         raise ConnectionError(f"Request timed out after 15 seconds: {url}")
     except requests.exceptions.ConnectionError:
         raise ConnectionError(f"Cannot reach URL: {url}")
     except requests.exceptions.HTTPError as e:
+        # If we get 403, try newspaper3k as fallback (better at bypassing bot detection)
+        if response.status_code == 403:
+            print("  📰 Site blocked direct access, trying newspaper3k parser...")
+            try:
+                from newspaper import Article
+                article = Article(url)
+                article.download()
+                article.parse()
+                
+                if article.text and len(article.text) >= 200:
+                    title = article.title or "Article"
+                    return (title, article.text)
+                else:
+                    raise ValueError("Article content too short or empty")
+            except ImportError:
+                raise ConnectionError(
+                    f"Failed to fetch (status 403): {url}\n"
+                    "  Tip: Install newspaper3k for better article extraction: pip install newspaper3k"
+                )
+            except Exception as e2:
+                raise ConnectionError(
+                    f"Failed to fetch (status 403): {url}\n"
+                    f"  Newspaper3k also failed: {e2}\n"
+                    "  This site may require browser access or have strict bot protection."
+                )
         raise ConnectionError(f"Failed to fetch (status {response.status_code}): {url}")
     except Exception as e:
         raise ConnectionError(f"Error fetching URL: {e}")
@@ -212,21 +261,28 @@ def fetch_article_content(url):
         parsed = urlparse(url)
         title = parsed.netloc.replace('www.', '')
     
-    # Remove unwanted elements
-    for element in soup.find_all(['script', 'style', 'noscript', 'nav', 'footer', 'aside', 'header']):
+    # Try multiple content selectors (sites use different structures) - FIND FIRST
+    content_root = None
+    for selector in ['article', '.entry-content', '.post-content', '.article-content', 'main', '.content']:
+        if selector.startswith('.'):
+            element = soup.select_one(selector)
+        else:
+            element = soup.find(selector)
+        
+        if element:
+            content_root = element
+            break
+    
+    # Fallback to body if nothing found
+    if not content_root:
+        content_root = soup.body if soup.body else soup
+    
+    # Now remove unwanted elements from within the content
+    for element in content_root.find_all(['script', 'style', 'noscript', 'nav', 'footer', 'aside', 'header', 'iframe', 'form']):
         element.decompose()
     
     # Extract text from meaningful elements
     text_parts = []
-    
-    # Try to find article content first
-    article = soup.find('article')
-    if article:
-        content_root = article
-    else:
-        content_root = soup.body if soup.body else soup
-    
-    # Extract text from paragraphs, headings, lists, blockquotes
     for element in content_root.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote']):
         text = element.get_text(separator=' ', strip=True)
         if text and len(text) > 20:  # Skip very short fragments
@@ -974,13 +1030,6 @@ def download_podcast_audio(audio_url, output_path):
         bool: Success
     """
     try:
-        # Add bin directory to PATH for ffmpeg access
-        import os
-        env = os.environ.copy()
-        bin_dir = Path(__file__).parent.parent / 'bin'
-        if bin_dir.exists():
-            env['PATH'] = f"{bin_dir}:{env.get('PATH', '')}"
-        
         cmd = [
             'python3', '-m', 'yt_dlp',
             audio_url,
@@ -990,13 +1039,74 @@ def download_podcast_audio(audio_url, output_path):
             '--no-playlist'
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         
         return result.returncode == 0 and output_path.exists()
         
     except Exception as e:
         print(f"  ⚠️ Audio download failed: {e}")
         return False
+
+
+def download_twitter_video(twitter_url):
+    """
+    Download video from Twitter/X URL using yt-dlp.
+    
+    Args:
+        twitter_url: Twitter/X status URL
+        
+    Returns:
+        tuple: (video_path, title) or (None, None) if failed
+    """
+    import tempfile
+    from pathlib import Path
+    
+    try:
+        temp_dir = Path(tempfile.mkdtemp())
+        output_template = str(temp_dir / "twitter_video.%(ext)s")
+        
+        print(f"  📥 Downloading Twitter video...")
+        
+        cmd = [
+            'python3', '-m', 'yt_dlp',
+            twitter_url,
+            '-o', output_template,
+            '--format', 'best[ext=mp4]/best',  # Prefer MP4
+            '--no-playlist',
+            '--quiet',
+            '--no-warnings'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        
+        if result.returncode == 0:
+            # Find the downloaded file
+            video_files = list(temp_dir.glob("twitter_video.*"))
+            if video_files:
+                video_path = video_files[0]
+                print(f"  ✓ Video downloaded: {video_path.name}")
+                
+                # Try to get title
+                title_cmd = [
+                    'python3', '-m', 'yt_dlp',
+                    twitter_url,
+                    '--get-title',
+                    '--no-warnings'
+                ]
+                title_result = subprocess.run(title_cmd, capture_output=True, text=True, timeout=10)
+                title = title_result.stdout.strip() if title_result.returncode == 0 else "Twitter Video"
+                
+                return (str(video_path), title)
+        
+        print(f"  ⚠️ Download failed: {result.stderr}")
+        return (None, None)
+        
+    except subprocess.TimeoutExpired:
+        print(f"  ⚠️ Download timed out")
+        return (None, None)
+    except Exception as e:
+        print(f"  ⚠️ Download error: {e}")
+        return (None, None)
 
 
 def transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60):
@@ -1015,20 +1125,12 @@ def transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60):
     try:
         from faster_whisper import WhisperModel
         
-        # Initialize model (tiny model for maximum speed)
+        # Initialize model (small model for speed/resource balance)
         print(f"  🤖 Loading Whisper model...")
-        model = WhisperModel("tiny", device="cpu", compute_type="int8")
+        model = WhisperModel("base", device="cpu", compute_type="int8")
         
         # Get audio duration
         import subprocess
-        import os
-        
-        # Add bin directory to PATH for ffprobe access
-        env = os.environ.copy()
-        bin_dir = Path(__file__).parent.parent / 'bin'
-        if bin_dir.exists():
-            env['PATH'] = f"{bin_dir}:{env.get('PATH', '')}"
-        
         duration_cmd = [
             'ffprobe', '-v', 'error', 
             '-show_entries', 'format=duration',
@@ -1037,7 +1139,7 @@ def transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60):
         ]
         
         try:
-            duration_result = subprocess.run(duration_cmd, capture_output=True, text=True, timeout=10, env=env)
+            duration_result = subprocess.run(duration_cmd, capture_output=True, text=True, timeout=10)
             duration_seconds = float(duration_result.stdout.strip())
             duration_minutes = duration_seconds / 60
         except:
@@ -1056,10 +1158,10 @@ def transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60):
             # Transcribe with 10-minute limit
             segments, info = model.transcribe(
                 str(audio_path),
-                beam_size=1,
+                beam_size=5,
                 language='en',
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=1000)
+                vad_parameters=dict(min_silence_duration_ms=500)
             )
             
             # Collect segments up to 10 minutes
@@ -1077,10 +1179,10 @@ def transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60):
             print(f"  🎤 Transcribing (Full mode: {duration_minutes:.1f} minutes)...")
             segments, info = model.transcribe(
                 str(audio_path),
-                beam_size=1,
+                beam_size=5,
                 language='en',
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=1000)
+                vad_parameters=dict(min_silence_duration_ms=500)
             )
             
             transcript_parts = [segment.text for segment in segments]
@@ -1566,46 +1668,30 @@ def handle_podcast_search(search_query):
         # Use first result (best match)
         podcast = podcasts[0]
         podcast_id = podcast['id']
-        podcast_title = podcast['title']
         
-        print(f"  ✓ Found: {podcast_title}")
+        print(f"  ✓ Found: {podcast['title']}")
         print(f"  📊 {podcast['total_episodes']} episodes available")
         
-        # Step 2: Search for episodes matching the topic
-        print(f"  🎯 Searching ALL episodes for: {topic}")
+        # Step 2: Get recent episodes
+        print(f"  📥 Fetching recent episodes...")
+        episodes = client.get_podcast_episodes(podcast_id, limit=20)
         
-        if topic.lower() == 'latest':
-            # For "latest", just get recent episodes
-            episodes = client.get_podcast_episodes(podcast_id, limit=5)
-            if not episodes:
-                raise ValueError("No episodes found for this podcast")
+        if not episodes:
+            raise ValueError("No episodes found for this podcast")
+        
+        print(f"  ✓ Retrieved {len(episodes)} episodes")
+        
+        # Step 3: Find episode matching topic
+        print(f"  🎯 Searching for episodes about: {topic}")
+        
+        matched_episode = find_episode_by_keyword(episodes, topic)
+        
+        if not matched_episode:
+            # Use latest episode if no match
+            print(f"  ℹ️  No specific match, using latest episode")
             matched_episode = episodes[0]
-            print(f"  ✓ Using latest episode: {matched_episode['title'][:60]}...")
         else:
-            # Use episode search to search ALL episodes (not just first 10)
-            episodes = client.search_episodes(podcast_title, topic, limit=10)
-            
-            if not episodes:
-                # Fallback: get recent episodes if search returns nothing
-                print(f"  ℹ️  No episodes matched '{topic}', trying recent episodes...")
-                episodes = client.get_podcast_episodes(podcast_id, limit=10)
-                
-                if not episodes:
-                    raise ValueError("No episodes found for this podcast")
-                
-                # Try keyword matching on recent episodes
-                matched_episode = find_episode_by_keyword(episodes, topic)
-                
-                if not matched_episode:
-                    print(f"  ℹ️  No match found, using latest episode")
-                    matched_episode = episodes[0]
-                else:
-                    print(f"  ✓ Matched in recent: {matched_episode['title'][:60]}...")
-            else:
-                # Use first search result (best match)
-                matched_episode = episodes[0]
-                print(f"  ✓ Found match: {matched_episode['title'][:60]}...")
-                print(f"  📅 Published: {matched_episode.get('pub_date', 'Unknown')}")
+            print(f"  ✓ Matched: {matched_episode['title'][:60]}...")
         
         duration = time.time() - start_time
         
@@ -1664,7 +1750,7 @@ def handle_podcast_search(search_query):
         # Transcribe
         start_time = time.time()
         try:
-            transcript, mode_used = transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=999)
+            transcript, mode_used = transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60)
             duration = time.time() - start_time
             
             if transcript:
@@ -2308,36 +2394,6 @@ def format_markdown_document(title, source_url, summary, takeaways, full_text,
     return '\n'.join(doc)
 
 
-def get_output_directory(content_type: ContentType) -> Path:
-    """
-    Get the output directory based on content type.
-    
-    Args:
-        content_type: Type of content being processed
-        
-    Returns:
-        Path to output directory
-    """
-    base_dir = Path.home() / "Documents" / "AI Content Summaries"
-    
-    # Map content type to subdirectory
-    subdirs = {
-        ContentType.VIDEO: "YouTube Summaries",
-        ContentType.ARTICLE: "Article Summaries",
-        ContentType.PODCAST: "Podcast Summaries",
-        ContentType.PODCAST_SEARCH: "Podcast Summaries",
-    }
-    
-    # Get subdirectory or use base if unknown type
-    subdir = subdirs.get(content_type)
-    output_dir = base_dir / subdir if subdir else base_dir
-    
-    # Create directory if it doesn't exist
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    return output_dir
-
-
 def get_unique_filepath(base_dir, base_name, extension):
     """Generate unique filepath, adding numeric suffix if file exists"""
     filepath = base_dir / f"{base_name}.{extension}"
@@ -2376,9 +2432,9 @@ def handle_youtube_command(args):
     
     # AI provider options
     if AI_AVAILABLE:
-        parser.add_argument('--ai-provider', choices=['openai', 'anthropic', 'deepseek', 'ollama', 'none'],
+        parser.add_argument('--ai-provider', choices=['openai', 'anthropic', 'deepseek', 'ollama', 'openrouter', 'groq', 'none'],
                            default='ollama',
-                           help='AI provider for enhanced summarization (default: ollama)')
+                           help='AI provider for enhanced summarization (default: ollama with Qwen 7B)')
         parser.add_argument('--ai-model', type=str,
                            help='Specific AI model to use (e.g., gpt-4, claude-3-sonnet, deepseek-chat)')
     else:
@@ -2420,13 +2476,15 @@ def handle_youtube_command(args):
             print(f"⚠ Could not initialize AI: {e}")
             ai_summarizer = None
     
+    # Ensure output directory exists - use organized folder structure
+    # Will determine subfolder (youtube/article/podcast) based on content type later
+    base_output_dir = Path.home() / "Documents" / "zz. AI Content Summaries"
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    
     print(f"Processing: {query}\n")
     
     # Detect content type
     content_type, identifier = detect_content_type(query)
-    
-    # Get appropriate output directory based on content type
-    output_dir = get_output_directory(content_type)
     
     if content_type == ContentType.ARTICLE:
         print(f"Detected content type: article")
@@ -2435,6 +2493,8 @@ def handle_youtube_command(args):
         print(f"Detected content type: podcast (URL)")
     elif content_type == ContentType.PODCAST_SEARCH:
         print(f"Detected content type: podcast (search query)")
+    elif content_type == ContentType.TWITTER_VIDEO:
+        print(f"Detected content type: Twitter/X video")
     else:
         print(f"Detected content type: video")
     
@@ -2524,6 +2584,56 @@ def handle_youtube_command(args):
             print(f"Error processing podcast search: {e}", file=sys.stderr)
             return 1
     
+    elif content_type == ContentType.TWITTER_VIDEO:
+        # Twitter/X video pipeline
+        try:
+            # Download video
+            video_path, video_title = download_twitter_video(identifier)
+            
+            if not video_path:
+                print(f"Error: Failed to download Twitter video", file=sys.stderr)
+                return 1
+            
+            # Transcribe
+            print(f"🎤 Transcribing video with Whisper...")
+            transcript, mode_used = transcribe_audio_whisper(video_path, mode='full', max_duration_minutes=120)
+            
+            if not transcript:
+                print(f"Error: Transcription failed", file=sys.stderr)
+                return 1
+            
+            word_count_actual = len(transcript.split())
+            print(f"✓ Transcription complete ({len(transcript)} characters, {word_count_actual} words)")
+            print(f"Title: {video_title}")
+            
+            content_text = transcript
+            content_title = video_title
+            source_url = identifier
+            source_id = None
+            content_label = "Transcript"
+            
+            # Assess content quality
+            quality_warnings = assess_content_quality(content_text, "video")
+            if quality_warnings:
+                print("\nContent Quality Notes:")
+                for warning in quality_warnings:
+                    print(f"  {warning}")
+            print()
+            
+            # Cleanup
+            try:
+                import os
+                os.remove(video_path)
+                os.rmdir(os.path.dirname(video_path))
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"Error processing Twitter video: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            return 1
+    
     else:
         # Video pipeline (existing logic)
         video_id = None
@@ -2599,47 +2709,9 @@ def handle_youtube_command(args):
             summary = cached_summary
         else:
             summary = ai_summarizer.generate_executive_summary(content_text, content_title or "Content", word_count)
-            
-            # Check if summary meets minimum length requirement (85% of target)
             if summary:
-                summary_word_count = len(summary.split())
-                min_word_count = int(word_count * 0.85)
-                
-                if summary_word_count < min_word_count:
-                    print(f"⚠ Initial summary too short ({summary_word_count} words, expected {word_count}). Retrying with stronger prompt...")
-                    
-                    # Retry with explicit feedback about the short length
-                    retry_prompt = f"""You returned only {summary_word_count} words, but we need at least {word_count} words. 
-
-Expand the summary with richer detail:
-- Add more specific examples and use cases
-- Include additional context and background information
-- Elaborate on the benefits and practical applications
-- Use explicit paragraph transitions between sections
-- Provide more depth in each of the four required paragraphs
-
-Previous attempt that was too short:
-{summary}
-
-Original content to summarize:
-{content_text[:6000]}"""
-                    
-                    summary = ai_summarizer.generate_executive_summary(
-                        retry_prompt,
-                        content_title or "Content",
-                        word_count
-                    )
-                    
-                    # Accept whatever the retry produces
-                    retry_word_count = len(summary.split())
-                    if retry_word_count >= min_word_count:
-                        print(f"✓ Retry successful ({retry_word_count} words)")
-                    else:
-                        print(f"✓ Retry produced {retry_word_count} words (below target, but accepting AI summary)")
-                
                 save_ai_response(content_text, 'summary', cache_params, summary)
             else:
-                # If AI completely failed, fall back to extractive as last resort
                 print("⚠ AI summary generation failed, using extraction method")
                 summary = summarize_transcript(content_text, word_count)
     else:
@@ -2651,7 +2723,7 @@ Original content to summarize:
     # Extract key takeaways
     takeaways = []
     if not skip_takeaways:
-        print(f"Extracting key takeaways (target: {takeaways_count})...")
+        print(f"Extracting key insights (target: {takeaways_count})...")
         
         # Use AI if available
         if ai_summarizer:
@@ -2686,7 +2758,7 @@ Original content to summarize:
             takeaways = extract_key_takeaways(content_text, takeaways_count)
         
         if takeaways:
-            print(f"✓ Extracted {len(takeaways)} key takeaways")
+            print(f"✓ Extracted {len(takeaways)} key insights")
         else:
             print("⚠ No key takeaways extracted")
     
@@ -2744,6 +2816,19 @@ Original content to summarize:
             source_id=source_id,
             next_steps=next_steps
         )
+        
+        # Determine correct subfolder based on content type
+        if content_type == ContentType.VIDEO or content_type == ContentType.TWITTER_VIDEO:
+            output_dir = base_output_dir / "youtube"
+        elif content_type == ContentType.ARTICLE:
+            output_dir = base_output_dir / "article"
+        elif content_type == ContentType.PODCAST or content_type == ContentType.PODCAST_SEARCH:
+            output_dir = base_output_dir / "podcast"
+        else:
+            output_dir = base_output_dir / "youtube"  # Default fallback
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
         md_file = get_unique_filepath(output_dir, slug, "md")
         
         with open(md_file, 'w', encoding='utf-8') as f:
@@ -2752,6 +2837,18 @@ Original content to summarize:
         
     else:
         # Save as separate text files (legacy format)
+        # Determine correct subfolder based on content type
+        if content_type == ContentType.VIDEO or content_type == ContentType.TWITTER_VIDEO:
+            output_dir = base_output_dir / "youtube"
+        elif content_type == ContentType.ARTICLE:
+            output_dir = base_output_dir / "article"
+        elif content_type == ContentType.PODCAST or content_type == ContentType.PODCAST_SEARCH:
+            output_dir = base_output_dir / "podcast"
+        else:
+            output_dir = base_output_dir / "youtube"  # Default fallback
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
         content_file = get_unique_filepath(output_dir, slug, f"{content_label.lower()}.txt")
         summary_file = get_unique_filepath(output_dir, slug, "summary.txt")
         

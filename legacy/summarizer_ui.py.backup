@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+import os
+import re
+import subprocess
+import streamlit as st
+
+
+st.set_page_config(page_title="Content Summarizer", page_icon="📚", layout="wide")
+
+# Initialize dark mode in session state
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = False
+
+# Dark mode toggle in top right
+col1, col2 = st.columns([6, 1])
+with col1:
+    st.title("📚 Content Summarizer")
+    st.caption("Summarize YouTube videos, podcasts, and web articles with AI")
+with col2:
+    st.write("")  # Spacing
+    if st.button("🌙" if not st.session_state.dark_mode else "☀️", 
+                 help="Toggle dark/light mode",
+                 key="theme_toggle"):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+        st.rerun()
+
+# Apply dark mode theme
+if st.session_state.dark_mode:
+    st.markdown("""
+    <style>
+        /* Dark mode styles */
+        .stApp {
+            background-color: #0e1117 !important;
+            color: #fafafa !important;
+        }
+        
+        /* Keep header elements (Deploy, Settings) in default colors */
+        header, header * {
+            color: inherit !important;
+        }
+        [data-testid="stHeader"] {
+            background-color: transparent !important;
+        }
+        [data-testid="stHeader"] * {
+            color: inherit !important;
+        }
+        
+        /* Main content area text white - exclude header */
+        main p, main span, main div, main h1, main h2, main h3, main h4, main h5, main h6, main label {
+            color: #fafafa !important;
+        }
+        .main p, .main span, .main div, .main h1, .main h2, .main h3, .main h4, .main h5, .main h6, .main label {
+            color: #fafafa !important;
+        }
+        
+        /* Text inputs - white text */
+        .stTextInput > div > div > input {
+            background-color: #262730 !important;
+            color: #ffffff !important;
+            border-color: #4a4a4a !important;
+        }
+        .stTextInput label {
+            color: #fafafa !important;
+        }
+        
+        /* Text area - white text */
+        .stTextArea textarea {
+            background-color: #262730 !important;
+            color: #ffffff !important;
+            border-color: #4a4a4a !important;
+        }
+        .stTextArea label {
+            color: #fafafa !important;
+        }
+        
+        /* Number input - white text */
+        .stNumberInput > div > div > input {
+            background-color: #262730 !important;
+            color: #ffffff !important;
+            border-color: #4a4a4a !important;
+        }
+        .stNumberInput label {
+            color: #fafafa !important;
+        }
+        
+        /* Input placeholders */
+        input::placeholder {
+            color: #999999 !important;
+            opacity: 1 !important;
+        }
+        
+        /* All markdown text white */
+        .stMarkdown {
+            color: #fafafa !important;
+        }
+        .stMarkdown p, .stMarkdown span, .stMarkdown div {
+            color: #fafafa !important;
+        }
+        
+        /* Captions and help text */
+        .stCaption, small {
+            color: #b0b0b0 !important;
+        }
+        
+        /* Select boxes */
+        div[data-baseweb="select"] > div {
+            background-color: #262730 !important;
+            color: #ffffff !important;
+            border-color: #4a4a4a !important;
+        }
+        
+        /* Alert boxes with white text */
+        .stAlert {
+            background-color: #1e1e1e !important;
+            border-color: #4a4a4a !important;
+            color: #fafafa !important;
+        }
+        .stAlert p, .stAlert span, .stAlert div {
+            color: #fafafa !important;
+        }
+        
+        /* Info box - blue tinted */
+        .stAlert[data-baseweb="notification"] {
+            background-color: #1a2332 !important;
+            color: #fafafa !important;
+        }
+        
+        /* Success box - green tinted */
+        .stSuccess {
+            background-color: #1a3d1a !important;
+            color: #ffffff !important;
+        }
+        .stSuccess p, .stSuccess span {
+            color: #ffffff !important;
+        }
+        
+        /* Warning box - orange tinted */
+        .stWarning {
+            background-color: #3d2a1a !important;
+            color: #ffffff !important;
+        }
+        .stWarning p, .stWarning span {
+            color: #ffffff !important;
+        }
+        
+        /* Error box - red tinted */
+        .stError {
+            background-color: #3d1a1a !important;
+            color: #ffffff !important;
+        }
+        .stError p, .stError span {
+            color: #ffffff !important;
+        }
+        
+        /* Buttons - white text */
+        button {
+            color: #ffffff !important;
+        }
+        .stButton > button {
+            color: #ffffff !important;
+        }
+        
+        /* Download button */
+        .stDownloadButton > button {
+            background-color: #262730 !important;
+            border-color: #4a4a4a !important;
+            color: #ffffff !important;
+        }
+        
+        /* Code blocks - light text */
+        code {
+            background-color: #1e1e1e !important;
+            color: #f8f8f2 !important;
+        }
+        pre {
+            background-color: #1e1e1e !important;
+            color: #f8f8f2 !important;
+        }
+        pre code {
+            color: #f8f8f2 !important;
+        }
+        
+        /* Spinner text */
+        .stSpinner > div {
+            color: #fafafa !important;
+        }
+        
+        /* Subheaders */
+        .stSubheader {
+            color: #fafafa !important;
+        }
+        
+        /* Dividers stay visible */
+        hr {
+            border-color: #4a4a4a !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <style>
+        /* Light mode styles (default) */
+        .stApp {
+            background-color: #ffffff;
+            color: #31333F;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+DEFAULT_WORDS = 500
+SCRIPT_PATH = "/Users/e.chan/youtube_slash_command.py"
+GROQ_API_KEY = "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"
+
+# Add info box
+st.info("✨ **Supports YouTube videos, podcasts, and article URLs** • AI-powered summaries with key takeaways")
+
+url = st.text_input(
+    "YouTube, Podcast, or Article URL", 
+    placeholder="https://www.youtube.com/... or https://podcasts.apple.com/... or https://example.com/article",
+    help="Paste a YouTube video, podcast (Apple/Spotify/RSS), or web article URL"
+)
+words = st.number_input("Summary length (words)", min_value=50, max_value=3000, value=DEFAULT_WORDS, step=50)
+
+run = st.button("✨ Summarize", type="primary")
+
+if run and url:
+    with st.spinner("Processing..."):
+        # Set environment for subprocess
+        env = os.environ.copy()
+        env['GROQ_API_KEY'] = GROQ_API_KEY
+        
+        cmd = [
+            "python3", SCRIPT_PATH, url,
+            "--format", "md",
+            "--words", str(words),
+            "--ai-provider", "groq",
+            "--ai-model", "llama-3.1-8b-instant"
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        out = (res.stdout or "") + ("\n" + res.stderr if res.stderr else "")
+
+    # Show AI provider/model confirmation if present
+    mm = re.search(r"Using\s+(\w+)\s+AI\s*\(model:\s*([^)]+)\)", out)
+    if mm:
+        provider, model = mm.group(1), mm.group(2)
+        st.success(f"AI Provider: {provider} • Model: {model}")
+    
+    # Check for quality warnings in output
+    warnings = []
+    if "Music video detected" in out:
+        warnings.append("⚠️ Music video - transcript is mostly lyrics")
+    if "Very short content" in out:
+        warnings.append("⚠️ Content is very short")
+    if "Highly conversational" in out:
+        warnings.append("💬 Conversational content")
+    
+    if warnings:
+        st.warning("**Content Quality Notes:**\n\n" + "\n".join(f"- {w}" for w in warnings))
+
+    st.subheader("Logs")
+    st.text_area("Command output", out, height=220)
+
+    m = re.search(r"Markdown document saved:\s*(.+)", out)
+    if res.returncode == 0 and m:
+        path = m.group(1).strip()
+        st.success(f"Saved: {path}")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                st.download_button("Download Markdown", content, file_name=os.path.basename(path))
+                st.divider()
+                st.subheader("Report Preview")
+                st.markdown(content)
+            except Exception as e:
+                st.warning(f"Could not read saved file: {e}")
+        else:
+            st.warning("Saved file path not found on disk. Check permissions/path in logs above.")
+    else:
+        st.error("Failed to generate summary. Check logs above for details.")

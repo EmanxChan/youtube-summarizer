@@ -6,6 +6,103 @@ import streamlit as st
 
 
 st.set_page_config(page_title="Content Summarizer", page_icon="📚", layout="wide")
+
+# Initialize theme preference
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = False
+
+# Dark mode toggle in sidebar
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+    dark_mode = st.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
+    if dark_mode != st.session_state.dark_mode:
+        st.session_state.dark_mode = dark_mode
+        st.rerun()
+    
+    st.divider()
+    st.caption("Current theme: **Dark**" if st.session_state.dark_mode else "Current theme: **Light**")
+
+# Apply dark mode styling
+if st.session_state.dark_mode:
+    st.markdown("""
+        <style>
+        /* Main app background */
+        .stApp {
+            background-color: #0E1117;
+        }
+        
+        /* Text colors */
+        .stMarkdown, .stText, p, h1, h2, h3, h4, h5, h6, label {
+            color: #FAFAFA !important;
+        }
+        
+        /* Input fields */
+        .stTextInput > div > div > input,
+        .stNumberInput > div > div > input {
+            background-color: #262730;
+            color: #FAFAFA;
+            border-color: #4A4A4A;
+        }
+        
+        /* Text areas */
+        .stTextArea textarea {
+            background-color: #262730;
+            color: #FAFAFA;
+            border-color: #4A4A4A;
+        }
+        
+        /* Info/warning/success boxes */
+        .stAlert {
+            background-color: #1E2130;
+            border-color: #4A4A4A;
+        }
+        
+        /* Buttons */
+        .stButton > button {
+            background-color: #262730;
+            color: #FAFAFA;
+            border-color: #4A4A4A;
+        }
+        
+        .stButton > button:hover {
+            background-color: #363740;
+            border-color: #666;
+        }
+        
+        /* Download button */
+        .stDownloadButton > button {
+            background-color: #262730;
+            color: #FAFAFA;
+            border-color: #4A4A4A;
+        }
+        
+        /* Code blocks */
+        code {
+            background-color: #262730;
+            color: #FF6B6B;
+        }
+        
+        pre {
+            background-color: #1A1D29;
+            border-color: #4A4A4A;
+        }
+        
+        /* Dividers */
+        hr {
+            border-color: #4A4A4A;
+        }
+        
+        /* Sidebar */
+        [data-testid="stSidebar"] {
+            background-color: #262730;
+        }
+        
+        [data-testid="stSidebar"] .stMarkdown {
+            color: #FAFAFA;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
 st.title("📚 Content Summarizer")
 st.caption("Summarize YouTube videos, podcasts, and web articles with AI")
 
