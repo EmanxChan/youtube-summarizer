@@ -274,6 +274,13 @@ def process_url(url, words):
         env = os.environ.copy()
         env['GROQ_API_KEY'] = GROQ_API_KEY
         
+        # Add src directory to PYTHONPATH so subprocess can import content_summarizer module
+        src_path = str(ROOT / "src")
+        if 'PYTHONPATH' in env:
+            env['PYTHONPATH'] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+        else:
+            env['PYTHONPATH'] = src_path
+        
         # Use direct script path instead of -m flag to avoid module import issues
         script_path = ROOT / "src" / "content_summarizer" / "youtube_slash_command.py"
         
@@ -411,6 +418,13 @@ def process_file(uploaded_file, words):
         
         env = os.environ.copy()
         env['GROQ_API_KEY'] = GROQ_API_KEY
+        
+        # Add src directory to PYTHONPATH for module imports
+        src_path = str(ROOT / "src")
+        if 'PYTHONPATH' in env:
+            env['PYTHONPATH'] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+        else:
+            env['PYTHONPATH'] = src_path
         
         # Escape filename for script
         safe_filename = uploaded_file.name.replace('"', '\\"')
@@ -712,6 +726,13 @@ def process_text(text_content, words):
     with st.spinner("Processing text..."):
         env = os.environ.copy()
         env['GROQ_API_KEY'] = GROQ_API_KEY
+        
+        # Add src directory to PYTHONPATH for module imports
+        src_path = str(ROOT / "src")
+        if 'PYTHONPATH' in env:
+            env['PYTHONPATH'] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+        else:
+            env['PYTHONPATH'] = src_path
         
         # Escape text content for Python script
         escaped_text = text_content.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
