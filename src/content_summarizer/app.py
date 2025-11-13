@@ -274,8 +274,11 @@ def process_url(url, words):
         env = os.environ.copy()
         env['GROQ_API_KEY'] = GROQ_API_KEY
         
+        # Use direct script path instead of -m flag to avoid module import issues
+        script_path = ROOT / "src" / "content_summarizer" / "youtube_slash_command.py"
+        
         cmd = [
-            "python3", "-m", "content_summarizer.youtube_slash_command", url,
+            "python3", str(script_path), url,
             "--format", "md",
             "--words", str(words),
             "--ai-provider", os.getenv("AI_PROVIDER", "groq"),
