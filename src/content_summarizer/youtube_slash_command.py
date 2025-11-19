@@ -115,7 +115,7 @@ def detect_content_type(query):
     """
     # Check for Twitter/X patterns
     if "twitter.com" in query or "x.com" in query:
-        if "/status/" in query:
+        if "/status/" in query or "/i/broadcasts/" in query:
             return (ContentType.TWITTER_VIDEO, query)
     
     # Check for YouTube patterns
