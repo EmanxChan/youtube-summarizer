@@ -1123,24 +1123,88 @@ def download_twitter_video(twitter_url):
         return (None, None)
 
 
+def transcribe_audio_groq(audio_path, max_file_size_mb=25):
+    """
+    Transcribe audio using Groq's Whisper API.
+    Best for cloud deployment (Streamlit Cloud, etc.)
+
+    Args:
+        audio_path: Path to audio file
+        max_file_size_mb: Maximum file size in MB (Groq limit is 25MB)
+
+    Returns:
+        tuple: (transcript_text, 'groq') or raises exception
+    """
+    import os
+    from pathlib import Path
+
+    groq_api_key = os.getenv('GROQ_API_KEY')
+    if not groq_api_key:
+        raise ValueError("GROQ_API_KEY not set")
+
+    audio_path = Path(audio_path)
+    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+
+    if file_size_mb > max_file_size_mb:
+        raise ValueError(f"Audio file too large ({file_size_mb:.1f}MB > {max_file_size_mb}MB limit)")
+
+    print(f"  🎤 Transcribing with Groq Whisper API ({file_size_mb:.1f}MB)...")
+
+    try:
+        import openai
+
+        client = openai.OpenAI(
+            api_key=groq_api_key,
+            base_url="https://api.groq.com/openai/v1"
+        )
+
+        with open(audio_path, 'rb') as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_file,
+                response_format="text"
+            )
+
+        transcript = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
+        print(f"  ✓ Groq transcription complete ({len(transcript)} chars)")
+        return transcript, 'groq'
+
+    except Exception as e:
+        raise Exception(f"Groq Whisper API failed: {e}")
+
+
 def transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60):
     """
-    Transcribe audio using faster-whisper.
+    Transcribe audio using Groq Whisper API (primary) or faster-whisper (fallback).
     Phase 4 fallback method.
-    
+
     Args:
         audio_path: Path to audio file
         mode: 'full' or 'gist' (gist = first 10 minutes + samples)
         max_duration_minutes: Maximum duration to transcribe in full mode
-        
+
     Returns:
         tuple: (transcript_text, actual_mode_used)
     """
+    import os
+    from pathlib import Path
+
+    audio_path = Path(audio_path)
+
+    # Try Groq Whisper API first (best for cloud deployment)
+    if os.getenv('GROQ_API_KEY'):
+        try:
+            return transcribe_audio_groq(audio_path)
+        except Exception as e:
+            print(f"  ⚠️ Groq Whisper failed: {e}")
+            print(f"  🔄 Falling back to local Whisper...")
+
+    # Fallback to local faster-whisper
     try:
         from faster_whisper import WhisperModel
-        
+
         # Initialize model (small model for speed/resource balance)
-        print(f"  🤖 Loading Whisper model...")
+        print(f"  🤖 Loading local Whisper model...")
         model = WhisperModel("base", device="cpu", compute_type="int8")
         
         # Get audio duration
@@ -1243,19 +1307,24 @@ def try_youtube_fallback(episode_title, podcast_name=None):
 def parse_podcast_search_query(query):
     """
     Parse podcast search query into podcast name and topic.
-    
+
     Supported formats:
       - "Podcast Name - topic"
+      - "Podcast Name -- topic" (double dash)
       - "Podcast Name: topic"
       - "Podcast Name episode about topic"
       - "Podcast Name latest"
       - "Podcast Name topic" (fallback)
-    
+
     Returns:
         tuple: (podcast_name, topic) or (None, None)
     """
     query = query.strip()
-    
+
+    # Normalize multiple dashes to single dash with spaces
+    # "All IN -- latest" -> "All IN - latest"
+    query = re.sub(r'\s*-{2,}\s*', ' - ', query)
+
     # Pattern 1: "Podcast Name - topic"
     if ' - ' in query:
         parts = query.split(' - ', 1)
@@ -1674,16 +1743,44 @@ def handle_podcast_search(search_query):
         print(f"  🔍 Searching Listen Notes for: {podcast_name}")
         start_time = time.time()
         
-        podcasts = client.search_podcast(podcast_name, limit=3)
-        
+        podcasts = client.search_podcast(podcast_name, limit=5)
+
         if not podcasts:
             raise ValueError(f"Podcast '{podcast_name}' not found on Listen Notes")
-        
-        # Use first result (best match)
-        podcast = podcasts[0]
+
+        # Show all matching podcasts for debugging
+        print(f"  📋 Search results:")
+        for i, p in enumerate(podcasts[:3], 1):
+            print(f"     {i}. {p['title']} ({p['total_episodes']} episodes)")
+
+        # Find best match by name similarity
+        def name_similarity(title, search):
+            """Calculate simple name match score"""
+            title_lower = title.lower()
+            search_lower = search.lower()
+            # Exact match
+            if search_lower == title_lower:
+                return 100
+            # Search term is contained in title
+            if search_lower in title_lower:
+                return 80
+            # Title starts with search term
+            if title_lower.startswith(search_lower):
+                return 70
+            # Word overlap
+            search_words = set(search_lower.split())
+            title_words = set(title_lower.split())
+            overlap = len(search_words & title_words) / max(len(search_words), 1)
+            return int(overlap * 60)
+
+        # Score and sort podcasts
+        scored = [(p, name_similarity(p['title'], podcast_name)) for p in podcasts]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        podcast = scored[0][0]
+        match_score = scored[0][1]
         podcast_id = podcast['id']
-        
-        print(f"  ✓ Found: {podcast['title']}")
+
+        print(f"  ✓ Best match: {podcast['title']} (score: {match_score})")
         print(f"  📊 {podcast['total_episodes']} episodes available")
         
         # Step 2: Get recent episodes
