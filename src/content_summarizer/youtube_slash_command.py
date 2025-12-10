@@ -1034,15 +1034,33 @@ def save_cached_transcript(audio_url, transcript):
 
 def download_podcast_audio(audio_url, output_path):
     """
-    Download podcast audio using yt-dlp.
-    
+    Download podcast audio using yt-dlp or direct download.
+
     Args:
         audio_url: URL to audio file
         output_path: Path to save audio
-        
+
     Returns:
         bool: Success
     """
+    from pathlib import Path
+    output_path = Path(output_path)
+
+    # Try direct download first (faster for direct MP3 URLs)
+    try:
+        import requests
+        response = requests.get(audio_url, stream=True, timeout=30)
+        if response.status_code == 200 and 'audio' in response.headers.get('content-type', ''):
+            print(f"  📥 Direct downloading audio...")
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            if output_path.exists() and output_path.stat().st_size > 1000:
+                return True
+    except Exception as e:
+        print(f"  ⚠️ Direct download failed: {e}")
+
+    # Fallback to yt-dlp
     try:
         cmd = [
             sys.executable, '-m', 'yt_dlp',
@@ -1052,14 +1070,368 @@ def download_podcast_audio(audio_url, output_path):
             '--audio-format', 'mp3',
             '--no-playlist'
         ]
-        
+
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-        
+
         return result.returncode == 0 and output_path.exists()
-        
+
     except Exception as e:
         print(f"  ⚠️ Audio download failed: {e}")
         return False
+
+
+def search_youtube_for_podcast(podcast_name, episode_title):
+    """
+    Search YouTube for a podcast episode mirror.
+    Many podcasts are uploaded to YouTube with transcripts.
+
+    Args:
+        podcast_name: Name of the podcast
+        episode_title: Title of the episode
+
+    Returns:
+        tuple: (video_id, video_title) or (None, None) if not found
+    """
+    import json
+
+    # Build search query
+    search_query = f"{podcast_name} {episode_title}"
+    # Limit query length
+    if len(search_query) > 100:
+        search_query = search_query[:100]
+
+    print(f"  🔍 Searching YouTube for: {search_query[:50]}...")
+
+    try:
+        cmd = [
+            sys.executable, '-m', 'yt_dlp',
+            f'ytsearch3:{search_query}',
+            '--print-json',
+            '--skip-download',
+            '--no-warnings'
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        if result.returncode != 0:
+            return None, None
+
+        # Parse results (one JSON per line)
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            try:
+                video_data = json.loads(line)
+                video_title = video_data.get('title', '').lower()
+                channel = video_data.get('uploader', '').lower()
+
+                # Check if this looks like the right podcast
+                podcast_lower = podcast_name.lower()
+                if podcast_lower in video_title or podcast_lower in channel:
+                    video_id = video_data.get('id')
+                    title = video_data.get('title')
+                    print(f"  ✓ Found YouTube mirror: {title[:50]}...")
+                    return video_id, title
+            except json.JSONDecodeError:
+                continue
+
+        print(f"  ℹ️ No YouTube mirror found")
+        return None, None
+
+    except subprocess.TimeoutExpired:
+        print(f"  ⚠️ YouTube search timed out")
+        return None, None
+    except Exception as e:
+        print(f"  ⚠️ YouTube search failed: {e}")
+        return None, None
+
+
+def chunk_audio_for_transcription(audio_path, max_size_mb=20, output_dir=None):
+    """
+    Split audio file into chunks suitable for Groq Whisper API (25MB limit).
+    Uses ffmpeg to split by duration.
+
+    Args:
+        audio_path: Path to audio file
+        max_size_mb: Maximum size per chunk in MB (default 20 for safety margin)
+        output_dir: Directory for chunks (default: same as audio file)
+
+    Returns:
+        list: List of chunk file paths, or empty list if chunking fails
+    """
+    from pathlib import Path
+    import math
+
+    audio_path = Path(audio_path)
+    if not audio_path.exists():
+        return []
+
+    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+
+    # If file is small enough, no chunking needed
+    if file_size_mb <= max_size_mb:
+        return [audio_path]
+
+    if output_dir is None:
+        output_dir = audio_path.parent
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"  ✂️ Audio is {file_size_mb:.1f}MB, splitting into chunks...")
+
+    # Get audio duration using ffprobe
+    try:
+        duration_cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            str(audio_path)
+        ]
+        duration_result = subprocess.run(duration_cmd, capture_output=True, text=True, timeout=10)
+        total_duration = float(duration_result.stdout.strip())
+    except Exception:
+        # Estimate duration from file size (assume 128kbps MP3)
+        total_duration = (file_size_mb * 1024 * 8) / 128  # seconds
+        print(f"  ⚠️ Could not detect duration, estimating: {total_duration/60:.1f} minutes")
+
+    # Calculate chunk duration to stay under size limit
+    # Aim for chunks that are ~20MB
+    bytes_per_second = (file_size_mb * 1024 * 1024) / total_duration
+    chunk_duration = int((max_size_mb * 1024 * 1024) / bytes_per_second)
+    chunk_duration = min(chunk_duration, 600)  # Max 10 minutes per chunk
+
+    num_chunks = math.ceil(total_duration / chunk_duration)
+    print(f"  📦 Creating {num_chunks} chunks of ~{chunk_duration/60:.1f} minutes each")
+
+    chunks = []
+    for i in range(num_chunks):
+        start_time = i * chunk_duration
+        chunk_path = output_dir / f"chunk_{i:03d}.mp3"
+
+        try:
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', str(audio_path),
+                '-ss', str(start_time),
+                '-t', str(chunk_duration),
+                '-acodec', 'libmp3lame',
+                '-ab', '64k',  # Lower bitrate to reduce file size
+                '-ar', '16000',  # 16kHz sample rate (good for speech)
+                '-ac', '1',  # Mono
+                str(chunk_path)
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+            if chunk_path.exists() and chunk_path.stat().st_size > 1000:
+                chunks.append(chunk_path)
+            else:
+                print(f"  ⚠️ Failed to create chunk {i}")
+
+        except Exception as e:
+            print(f"  ⚠️ Chunk {i} failed: {e}")
+
+    print(f"  ✓ Created {len(chunks)} audio chunks")
+    return chunks
+
+
+def transcribe_audio_huggingface(audio_path, api_token=None):
+    """
+    Transcribe audio using Hugging Face Inference API (free).
+    Uses the Whisper large-v3 model.
+
+    Args:
+        audio_path: Path to audio file
+        api_token: Hugging Face API token (or uses HF_TOKEN env var)
+
+    Returns:
+        tuple: (transcript_text, 'huggingface') or raises exception
+    """
+    import os
+    import requests
+    from pathlib import Path
+
+    api_token = api_token or os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
+    if not api_token:
+        raise ValueError("Hugging Face API token not set. Set HF_TOKEN environment variable.")
+
+    audio_path = Path(audio_path)
+    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+
+    if file_size_mb > 10:
+        raise ValueError(f"Audio file too large for HF API ({file_size_mb:.1f}MB > 10MB limit)")
+
+    print(f"  🤗 Transcribing with Hugging Face API ({file_size_mb:.1f}MB)...")
+
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+    headers = {"Authorization": f"Bearer {api_token}"}
+
+    with open(audio_path, "rb") as f:
+        data = f.read()
+
+    try:
+        response = requests.post(API_URL, headers=headers, data=data, timeout=300)
+        response.raise_for_status()
+
+        result = response.json()
+        if isinstance(result, dict) and 'text' in result:
+            transcript = result['text'].strip()
+            print(f"  ✓ HuggingFace transcription complete ({len(transcript)} chars)")
+            return transcript, 'huggingface'
+        else:
+            raise ValueError(f"Unexpected response format: {result}")
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 503:
+            raise ValueError("HuggingFace model is loading, try again in ~20 seconds")
+        raise ValueError(f"HuggingFace API error: {e}")
+    except Exception as e:
+        raise ValueError(f"HuggingFace transcription failed: {e}")
+
+
+def transcribe_podcast_full(audio_path, episode_title=""):
+    """
+    Full podcast transcription pipeline.
+    Tries multiple methods in order: Groq chunking → HuggingFace fallback.
+
+    Args:
+        audio_path: Path to downloaded audio file
+        episode_title: Episode title for logging
+
+    Returns:
+        tuple: (transcript_text, method_used) or raises exception
+    """
+    import os
+    from pathlib import Path
+    import tempfile
+
+    audio_path = Path(audio_path)
+    if not audio_path.exists():
+        raise ValueError(f"Audio file not found: {audio_path}")
+
+    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+    print(f"  📊 Audio file: {file_size_mb:.1f}MB")
+
+    # Method 1: Groq Whisper with chunking
+    if os.getenv('GROQ_API_KEY'):
+        try:
+            print(f"  🎯 Attempting Groq Whisper transcription...")
+
+            # Chunk the audio if needed
+            temp_dir = Path(tempfile.mkdtemp())
+            chunks = chunk_audio_for_transcription(audio_path, max_size_mb=20, output_dir=temp_dir)
+
+            if not chunks:
+                raise ValueError("Audio chunking failed")
+
+            transcripts = []
+            for i, chunk_path in enumerate(chunks):
+                print(f"  🎤 Transcribing chunk {i+1}/{len(chunks)}...")
+                try:
+                    chunk_transcript, _ = transcribe_audio_groq(chunk_path)
+                    transcripts.append(chunk_transcript)
+                except Exception as e:
+                    print(f"  ⚠️ Chunk {i+1} failed: {e}")
+                    # Continue with other chunks
+
+            # Cleanup chunks
+            for chunk in chunks:
+                try:
+                    if chunk != audio_path:  # Don't delete original
+                        chunk.unlink()
+                except:
+                    pass
+            try:
+                temp_dir.rmdir()
+            except:
+                pass
+
+            if transcripts:
+                full_transcript = " ".join(transcripts)
+                print(f"  ✓ Groq transcription complete ({len(full_transcript)} chars from {len(transcripts)} chunks)")
+                return full_transcript, f'groq_chunked_{len(chunks)}'
+
+        except Exception as e:
+            print(f"  ⚠️ Groq transcription failed: {e}")
+            print(f"  🔄 Trying HuggingFace fallback...")
+
+    # Method 2: HuggingFace (for smaller files or as fallback)
+    hf_token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_TOKEN')
+    if hf_token:
+        try:
+            # HuggingFace has 10MB limit, need to chunk
+            temp_dir = Path(tempfile.mkdtemp())
+            chunks = chunk_audio_for_transcription(audio_path, max_size_mb=8, output_dir=temp_dir)
+
+            if not chunks:
+                raise ValueError("Audio chunking for HF failed")
+
+            transcripts = []
+            for i, chunk_path in enumerate(chunks):
+                print(f"  🤗 HF transcribing chunk {i+1}/{len(chunks)}...")
+                try:
+                    chunk_transcript, _ = transcribe_audio_huggingface(chunk_path, hf_token)
+                    transcripts.append(chunk_transcript)
+                except Exception as e:
+                    print(f"  ⚠️ HF chunk {i+1} failed: {e}")
+
+            # Cleanup
+            for chunk in chunks:
+                try:
+                    if chunk != audio_path:
+                        chunk.unlink()
+                except:
+                    pass
+
+            if transcripts:
+                full_transcript = " ".join(transcripts)
+                print(f"  ✓ HuggingFace transcription complete ({len(full_transcript)} chars)")
+                return full_transcript, f'huggingface_chunked_{len(chunks)}'
+
+        except Exception as e:
+            print(f"  ⚠️ HuggingFace transcription failed: {e}")
+
+    # No methods worked
+    raise ValueError("All transcription methods failed. Ensure GROQ_API_KEY or HF_TOKEN is set.")
+
+
+def get_youtube_transcript_for_podcast(video_id):
+    """
+    Get transcript from YouTube video (podcast mirror).
+
+    Args:
+        video_id: YouTube video ID
+
+    Returns:
+        str: Transcript text or None
+    """
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+
+        # Try to get transcript
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+        # Prefer manual captions over auto-generated
+        transcript = None
+        try:
+            transcript = transcript_list.find_manually_created_transcript(['en', 'en-US', 'en-GB'])
+        except:
+            try:
+                transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
+            except:
+                pass
+
+        if transcript:
+            transcript_data = transcript.fetch()
+            full_text = " ".join([item['text'] for item in transcript_data])
+            return full_text
+
+        return None
+
+    except Exception as e:
+        print(f"  ⚠️ Could not get YouTube transcript: {e}")
+        return None
 
 
 def download_twitter_video(twitter_url):
@@ -1622,84 +1994,73 @@ def handle_podcast_content(podcast_url):
         title = episode_title
     
     if not audio_url:
-        # Last resort: use show notes if available
-        if show_notes and len(show_notes) > 200:
-            print(f"  ⚠️ No audio URL found, using show notes as fallback")
-            return title, show_notes, "Show Notes (No Transcript Available)"
-        
         raise ValueError(
-            "Could not find transcript or audio URL. "
-            "This podcast may require manual transcript provision."
+            "Could not find audio URL for this episode. "
+            "This podcast may not provide direct audio access."
         )
-    
-    # Check cache
+
+    # Check cache first
     print(f"  💾 Checking transcript cache...")
     cached = get_cached_transcript(audio_url)
     if cached:
         print(f"  ✓ Found cached transcript!")
         return title, cached, "Podcast Transcript (Cached)"
-    
+
     # Download audio
     print(f"  📥 Downloading podcast audio...")
     import tempfile
     temp_dir = Path(tempfile.mkdtemp())
     audio_path = temp_dir / "podcast_audio.mp3"
-    
+
     if not download_podcast_audio(audio_url, audio_path):
-        # Fallback to show notes
-        if show_notes and len(show_notes) > 200:
-            print(f"  ⚠️ Audio download failed, using show notes")
-            return title, show_notes, "Show Notes (Audio Download Failed)"
-        raise ValueError("Audio download failed and no fallback content available")
-    
+        raise ValueError("Audio download failed. Please check the podcast URL and try again.")
+
     print(f"  ✓ Audio downloaded")
-    
-    # Transcribe
+
+    # Full transcription pipeline (Groq chunking → HuggingFace fallback)
+    # NO description/show notes fallback - we want real transcripts
     start_time = time.time()
     try:
-        transcript, mode_used = transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=3)
+        transcript, mode_used = transcribe_podcast_full(audio_path, title)
         duration = time.time() - start_time
-        
+
         if transcript:
-            print(f"  ✓ Transcription complete ({mode_used} mode)!")
-            
+            print(f"  ✓ Full transcription complete ({mode_used})!")
+
             # Record metrics
             if metrics:
-                metrics.record('whisper', podcast_url, True, duration)
-            
+                metrics.record(mode_used, podcast_url, True, duration)
+
             # Cache the transcript
             print(f"  💾 Caching transcript...")
             save_cached_transcript(audio_url, transcript)
-            
+
             # Cleanup
             try:
                 audio_path.unlink()
                 temp_dir.rmdir()
             except:
                 pass
-            
-            label = f"Podcast Transcript (Whisper {mode_used.title()})"
+
+            label = f"Podcast Transcript ({mode_used.replace('_', ' ').title()})"
             return title, transcript, label
-    
+
     except Exception as e:
         duration = time.time() - start_time
-        print(f"  ⚠️ Whisper transcription failed: {e}")
+        print(f"  ❌ Transcription failed: {e}")
         if metrics:
-            metrics.record('whisper', podcast_url, False, duration)
-    
-    # Final fallback: show notes
-    if show_notes and len(show_notes) > 200:
-        print(f"  ⚠️ All transcription methods failed, using show notes")
-        if metrics:
-            metrics.record('show_notes', podcast_url, True, 0.5)
-        return title, show_notes, "Show Notes (Transcription Failed)"
-    
-    if metrics:
-        metrics.record('all_methods_failed', podcast_url, False, 0)
-    
+            metrics.record('transcription_failed', podcast_url, False, duration)
+
+        # Cleanup on failure
+        try:
+            audio_path.unlink()
+            temp_dir.rmdir()
+        except:
+            pass
+
     raise ValueError(
-        "All transcription methods failed and no fallback content available. "
-        "Please try a different episode or provide a transcript manually."
+        "Transcription failed. Ensure GROQ_API_KEY is set. "
+        "For backup, you can also set HF_TOKEN (Hugging Face token)."
     )
 
 
@@ -1814,24 +2175,14 @@ def handle_podcast_search(search_query):
         if ln_metrics.get('quota_remaining'):
             print(f"  📊 Listen Notes quota: {ln_metrics['requests_made']} used | {ln_metrics['quota_remaining']} remaining")
         
-        # Step 4: Get audio URL and metadata
+        # Step 4: Get episode metadata
         audio_url = matched_episode.get('audio_url')
         episode_title = matched_episode['title']
-        description = matched_episode.get('description', '')
-        
-        if not audio_url:
-            # Fallback to description
-            if description and len(description) > 200:
-                print(f"  ℹ️  No audio URL, using description")
-                return episode_title, description, "Episode Description (Listen Notes)"
-            raise ValueError("No audio URL or description available for this episode")
-        
-        print(f"  ✓ Audio URL obtained")
-        
+
         # Step 5: Check if we have cached transcript
         cache_key = f"episode_{matched_episode['episode_id']}"
         cached = cache.get(cache_key)
-        
+
         if cached and cached.get('transcript'):
             print(f"  💾 Using cached transcript")
             return (
@@ -1839,33 +2190,52 @@ def handle_podcast_search(search_query):
                 cached['transcript'],
                 "Podcast Transcript (Cached)"
             )
-        
-        # Step 6: Transcribe with Whisper
-        print(f"  🎤 Transcribing audio with Whisper...")
+
+        # Step 6: Try YouTube mirror first (free, fast, high quality)
+        print(f"  📺 Checking for YouTube mirror...")
+        yt_video_id, yt_title = search_youtube_for_podcast(podcast['title'], episode_title)
+
+        if yt_video_id:
+            yt_transcript = get_youtube_transcript_for_podcast(yt_video_id)
+            if yt_transcript and len(yt_transcript) > 500:
+                print(f"  ✓ Got transcript from YouTube!")
+                # Cache it
+                cache.set(cache_key, {
+                    'transcript': yt_transcript,
+                    'title': episode_title,
+                    'source': 'youtube_mirror'
+                })
+                if metrics:
+                    metrics.record('youtube_mirror', search_query, True, time.time() - start_time)
+                return episode_title, yt_transcript, "Podcast Transcript (YouTube Mirror)"
+
+        # Step 7: Download audio and transcribe with full pipeline
+        if not audio_url:
+            raise ValueError("No audio URL available for this episode and no YouTube mirror found.")
+
+        print(f"  ✓ Audio URL obtained")
         print(f"  📥 Downloading podcast audio...")
-        
+
         import tempfile
         from pathlib import Path
-        
+
         temp_dir = Path(tempfile.mkdtemp())
         audio_path = temp_dir / "podcast_audio.mp3"
-        
+
         if not download_podcast_audio(audio_url, audio_path):
-            print(f"  ⚠️ Audio download failed, using description")
-            if description and len(description) > 200:
-                return episode_title, description, "Episode Description (Listen Notes)"
-            raise ValueError("Could not download audio and no description available")
-        
+            raise ValueError("Audio download failed. Please try again later.")
+
         print(f"  ✓ Audio downloaded")
-        
-        # Transcribe
+
+        # Full transcription pipeline (Groq chunking → HuggingFace)
+        # NO description fallback - we want real transcripts
         start_time = time.time()
         try:
-            transcript, mode_used = transcribe_audio_whisper(audio_path, mode='full', max_duration_minutes=60)
+            transcript, mode_used = transcribe_podcast_full(audio_path, episode_title)
             duration = time.time() - start_time
-            
+
             if transcript:
-                print(f"  ✓ Transcription complete ({mode_used} mode)!")
+                print(f"  ✓ Full transcription complete ({mode_used})!")
                 
                 if metrics:
                     metrics.record('whisper', search_query, True, duration)
@@ -1884,22 +2254,28 @@ def handle_podcast_search(search_query):
                 except:
                     pass
                 
-                label = f"Podcast Transcript (Listen Notes + Whisper {mode_used.title()})"
+                label = f"Podcast Transcript ({mode_used.replace('_', ' ').title()})"
                 return episode_title, transcript, label
-        
+
         except Exception as e:
             duration = time.time() - start_time
-            print(f"  ⚠️ Whisper failed: {e}")
+            print(f"  ❌ Transcription failed: {e}")
             if metrics:
-                metrics.record('whisper', search_query, False, duration)
-        
-        # Fallback: use description
-        if description and len(description) > 200:
-            print(f"  ⚠️ Using episode description as fallback")
-            return episode_title, description, "Episode Description (Listen Notes)"
-        
-        raise ValueError("Could not obtain transcript or description")
-        
+                metrics.record('transcription_failed', search_query, False, duration)
+
+            # Cleanup on failure
+            try:
+                audio_path.unlink()
+                temp_dir.rmdir()
+            except:
+                pass
+
+        # NO description fallback - raise error with helpful message
+        raise ValueError(
+            "Transcription failed. Ensure GROQ_API_KEY is set. "
+            "For backup, you can also set HF_TOKEN (Hugging Face token)."
+        )
+
     except Exception as e:
         print(f"  ❌ Error: {e}")
         raise

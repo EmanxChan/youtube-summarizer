@@ -38,7 +38,7 @@ def get_secret(key_name):
 GROQ_API_KEY = get_secret('GROQ_API_KEY')
 
 # Load optional API keys and set them as environment variables for subprocesses
-for optional_key in ['LISTEN_NOTES_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']:
+for optional_key in ['LISTEN_NOTES_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'HF_TOKEN', 'HUGGINGFACE_TOKEN']:
     value = get_secret(optional_key)
     if value:
         os.environ[optional_key] = value
