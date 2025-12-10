@@ -1664,8 +1664,8 @@ def handle_podcast_search(search_query):
         raise ValueError("Listen Notes API required for podcast search. Please set LISTEN_NOTES_API_KEY.")
     
     try:
-        from listen_notes_client import ListenNotesClient
-        from podcast_cache import PodcastCache
+        from content_summarizer.listen_notes_client import ListenNotesClient
+        from content_summarizer.podcast_cache import PodcastCache
         
         client = ListenNotesClient()
         cache = PodcastCache(provider='listen_notes')
