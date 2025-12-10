@@ -1146,6 +1146,15 @@ def search_youtube_for_podcast(podcast_name, episode_title):
         return None, None
 
 
+def is_ffmpeg_available():
+    """Check if ffmpeg is available on the system."""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5)
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
 def chunk_audio_for_transcription(audio_path, max_size_mb=20, output_dir=None):
     """
     Split audio file into chunks suitable for Groq Whisper API (25MB limit).
@@ -1171,6 +1180,13 @@ def chunk_audio_for_transcription(audio_path, max_size_mb=20, output_dir=None):
     # If file is small enough, no chunking needed
     if file_size_mb <= max_size_mb:
         return [audio_path]
+
+    # Check if ffmpeg is available
+    if not is_ffmpeg_available():
+        print(f"  ⚠️ ffmpeg not installed - cannot chunk large audio files")
+        print(f"  ℹ️ File is {file_size_mb:.1f}MB but limit is {max_size_mb}MB")
+        print(f"  💡 Add 'ffmpeg' to packages.txt for Streamlit Cloud")
+        return []
 
     if output_dir is None:
         output_dir = audio_path.parent
@@ -1392,8 +1408,16 @@ def transcribe_podcast_full(audio_path, episode_title=""):
         except Exception as e:
             print(f"  ⚠️ HuggingFace transcription failed: {e}")
 
-    # No methods worked
-    raise ValueError("All transcription methods failed. Ensure GROQ_API_KEY or HF_TOKEN is set.")
+    # No methods worked - provide helpful error message
+    if not is_ffmpeg_available():
+        raise ValueError(
+            "Transcription failed: ffmpeg is required for large audio files. "
+            "Add 'ffmpeg' to packages.txt for Streamlit Cloud deployment."
+        )
+    raise ValueError(
+        "All transcription methods failed. "
+        "Ensure GROQ_API_KEY is set (and optionally HF_TOKEN as backup)."
+    )
 
 
 def get_youtube_transcript_for_podcast(video_id):
