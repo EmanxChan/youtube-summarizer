@@ -1,6 +1,7 @@
 # Core Content Processing
 requests>=2.25.1
-youtube-transcript-api>=0.5.0
+# Pin to 0.6.x - version 1.0+ has breaking API changes
+youtube-transcript-api>=0.6.0,<1.0.0
 nltk>=3.6
 textwrap3>=0.9.2
 yt-dlp>=2023.3.4

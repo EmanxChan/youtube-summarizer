@@ -22,19 +22,26 @@ st.set_page_config(page_title="Content Summarizer", page_icon="📚", layout="wi
 # Constants
 DEFAULT_WORDS = 500
 
-# Load API key from Streamlit secrets (cloud) or environment variable (local)
-def get_api_key():
-    """Get API key from Streamlit secrets or environment variables."""
+# Load API keys from Streamlit secrets (cloud) or environment variables (local)
+def get_secret(key_name):
+    """Get a secret from Streamlit secrets or environment variables."""
     # Try Streamlit secrets first (for Streamlit Cloud deployment)
     try:
-        if hasattr(st, 'secrets') and 'GROQ_API_KEY' in st.secrets:
-            return st.secrets['GROQ_API_KEY']
+        if hasattr(st, 'secrets') and key_name in st.secrets:
+            return st.secrets[key_name]
     except Exception:
         pass
     # Fallback to environment variable
-    return os.environ.get("GROQ_API_KEY", "")
+    return os.environ.get(key_name, "")
 
-GROQ_API_KEY = get_api_key()
+# Load required and optional API keys
+GROQ_API_KEY = get_secret('GROQ_API_KEY')
+
+# Load optional API keys and set them as environment variables for subprocesses
+for optional_key in ['LISTEN_NOTES_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']:
+    value = get_secret(optional_key)
+    if value:
+        os.environ[optional_key] = value
 
 # Check if API key is set
 if not GROQ_API_KEY:
