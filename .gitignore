@@ -16,6 +16,10 @@ ENV/
 *.env
 !.env.example
 
+# Streamlit secrets (IMPORTANT - contains API keys)
+.streamlit/secrets.toml
+!.streamlit/secrets.toml.example
+
 # OS files
 .DS_Store
 .DS_Store?

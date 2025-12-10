@@ -20,12 +20,26 @@ load_dotenv(ROOT / ".env")
 st.set_page_config(page_title="Content Summarizer", page_icon="📚", layout="wide")
 
 # Constants
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 DEFAULT_WORDS = 500
+
+# Load API key from Streamlit secrets (cloud) or environment variable (local)
+def get_api_key():
+    """Get API key from Streamlit secrets or environment variables."""
+    # Try Streamlit secrets first (for Streamlit Cloud deployment)
+    try:
+        if hasattr(st, 'secrets') and 'GROQ_API_KEY' in st.secrets:
+            return st.secrets['GROQ_API_KEY']
+    except Exception:
+        pass
+    # Fallback to environment variable
+    return os.environ.get("GROQ_API_KEY", "")
+
+GROQ_API_KEY = get_api_key()
 
 # Check if API key is set
 if not GROQ_API_KEY:
-    st.error("⚠️ GROQ_API_KEY environment variable not set. Please set it to use the summarizer.")
+    st.error("⚠️ GROQ_API_KEY not configured. Set it via environment variable or Streamlit secrets.")
+    st.info("💡 **For local development:** Create a `.env` file with `GROQ_API_KEY=your_key`\n\n💡 **For Streamlit Cloud:** Add the key in the app's Secrets settings")
     st.stop()
 
 # Initialize dark mode in session state
@@ -431,10 +445,10 @@ def process_file(uploaded_file, words):
         
         if is_pdf:
             # PDF processing
+            # Note: GROQ_API_KEY is passed via subprocess env parameter, not embedded in script
             transcribe_script = f'''
 import sys
 import os
-os.environ["GROQ_API_KEY"] = "{GROQ_API_KEY}"
 
 from content_summarizer.ai_summarizer import AITranscriptSummarizer
 
@@ -565,10 +579,10 @@ except Exception as e:
 '''
         else:
             # Audio/Video processing
+            # Note: GROQ_API_KEY is passed via subprocess env parameter, not embedded in script
             transcribe_script = f'''
 import sys
 import os
-os.environ["GROQ_API_KEY"] = "{GROQ_API_KEY}"
 
 from content_summarizer.youtube_slash_command import transcribe_audio_whisper
 from content_summarizer.ai_summarizer import AITranscriptSummarizer
@@ -737,13 +751,19 @@ def process_text(text_content, words):
         # Escape text content for Python script
         escaped_text = text_content.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
         
+        # Note: GROQ_API_KEY is passed via subprocess env parameter, not embedded in script
+        # Safely encode text content to avoid injection via triple quotes
+        import base64
+        encoded_text = base64.b64encode(text_content.encode('utf-8')).decode('ascii')
+
         summarize_script = f'''
 import os
-os.environ["GROQ_API_KEY"] = "{GROQ_API_KEY}"
+import base64
 
 from content_summarizer.ai_summarizer import AITranscriptSummarizer
 
-transcript = """{text_content}"""
+# Decode text safely to avoid code injection from user content
+transcript = base64.b64decode("{encoded_text}").decode('utf-8')
 title = "Pasted Content"
 
 try:
@@ -852,9 +872,9 @@ if run:
         process_url(content, words)
         # Results will be displayed below after session state is set
     elif input_type == "file":
-        # Check file size
-        if content.size > 500 * 1024 * 1024:  # 500 MB limit
-            st.error("❌ File too large. Maximum size: 500 MB")
+        # Check file size (200 MB limit for cloud deployments)
+        if content.size > 200 * 1024 * 1024:
+            st.error("❌ File too large. Maximum size: 200 MB")
         else:
             process_file(content, words)
     elif input_type == "text":
