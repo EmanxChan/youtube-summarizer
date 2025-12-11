@@ -258,11 +258,12 @@ class ListenNotesClient:
     def _parse_podcast_url(self, url: str) -> Optional[Dict]:
         """
         Extract identifiers from podcast URLs.
-        
+
         Returns:
             Dict with platform, show_id, episode_id, or None
         """
         # Apple Podcasts: podcasts.apple.com/.../id{SHOW}?i={EPISODE}
+        # Also handles: podcasts.apple.com/us/podcast/episode-name/id123?i=456
         apple_match = re.search(r'podcasts\.apple\.com.*?/id(\d+)(?:\?i=(\d+))?', url)
         if apple_match:
             show_id = apple_match.group(1)
@@ -272,7 +273,7 @@ class ListenNotesClient:
                 'show_id': show_id,
                 'episode_id': episode_id
             }
-        
+
         # Spotify: open.spotify.com/episode/{EPISODE_ID}
         spotify_match = re.search(r'spotify\.com/episode/([a-zA-Z0-9]+)', url)
         if spotify_match:
@@ -280,7 +281,7 @@ class ListenNotesClient:
                 'platform': 'spotify',
                 'episode_id': spotify_match.group(1)
             }
-        
+
         # Spotify: open.spotify.com/show/{SHOW_ID}
         spotify_show_match = re.search(r'spotify\.com/show/([a-zA-Z0-9]+)', url)
         if spotify_show_match:
@@ -288,16 +289,31 @@ class ListenNotesClient:
                 'platform': 'spotify',
                 'show_id': spotify_show_match.group(1)
             }
-        
+
+        # Neuecast.app: neuecast.app/podcast/{SHOW_SLUG} or neuecast.app/episode/{EPISODE_ID}
+        neuecast_episode = re.search(r'neuecast\.app/episode/([a-zA-Z0-9_-]+)', url)
+        if neuecast_episode:
+            return {
+                'platform': 'neuecast',
+                'episode_id': neuecast_episode.group(1)
+            }
+
+        neuecast_podcast = re.search(r'neuecast\.app/podcast/([a-zA-Z0-9_-]+)', url)
+        if neuecast_podcast:
+            return {
+                'platform': 'neuecast',
+                'show_id': neuecast_podcast.group(1)
+            }
+
         # RSS Feed
-        if url.startswith('http') and (url.endswith('.rss') or url.endswith('.xml') or 
-                                        '/rss' in url.lower() or '/feed' in url.lower() or 
+        if url.startswith('http') and (url.endswith('.rss') or url.endswith('.xml') or
+                                        '/rss' in url.lower() or '/feed' in url.lower() or
                                         'feeds.' in url.lower()):
             return {
                 'platform': 'rss',
                 'rss_url': url
             }
-        
+
         return None
     
     def get_metrics(self) -> Dict:
