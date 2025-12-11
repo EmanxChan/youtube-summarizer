@@ -72,31 +72,118 @@ apply_dark_mode()
 # Add info box
 st.info("✨ **Supports YouTube videos, podcasts, articles, files, and text** • AI-powered summaries with key takeaways")
 
-# === NEW: Tabbed Input Interface ===
-tab1, tab2, tab3 = st.tabs(["🔗 URL", "📎 Upload File", "📝 Paste Text"])
+# === Tabbed Input Interface with Dedicated Content Types ===
+tab_yt, tab_podcast, tab_article, tab_upload, tab_text = st.tabs([
+    "🎬 YouTube",
+    "🎙️ Podcast",
+    "📰 Article",
+    "📎 Upload",
+    "📝 Text"
+])
 
 input_type = None
 content = None
 
-with tab1:
-    st.markdown("### Enter a URL")
-    url_input = st.text_input(
-        "Enter URL",
-        placeholder="https://youtube.com/watch?v=... or podcast/article URL",
+with tab_yt:
+    st.markdown("### YouTube Video")
+    st.caption("Enter a YouTube URL or video ID to summarize")
+    yt_input = st.text_input(
+        "YouTube URL",
+        placeholder="https://youtube.com/watch?v=... or https://youtu.be/...",
         label_visibility="collapsed",
-        key="url_input"
+        key="youtube_input"
     )
-    if url_input:
+    if yt_input:
         input_type = "url"
-        content = url_input
+        content = yt_input
+        # Show detected video info
+        if "youtube.com" in yt_input or "youtu.be" in yt_input:
+            st.success("✓ YouTube video detected")
 
-with tab2:
-    st.markdown("### Upload Audio, Video, or PDF File")
-    st.caption("📁 Supported: MP4, MP3, M4A, WAV, MOV, AVI, PDF (Zoom recordings, audio files, documents, etc.)")
-    
+with tab_podcast:
+    st.markdown("### Podcast Episode")
+    st.caption("Enter a podcast URL, direct audio link, or search by name")
+
+    podcast_mode = st.radio(
+        "Input method",
+        ["🔗 Podcast URL", "🎵 Direct Audio URL", "🔍 Search by Name"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="podcast_mode"
+    )
+
+    if podcast_mode == "🔗 Podcast URL":
+        podcast_url = st.text_input(
+            "Podcast URL",
+            placeholder="Apple Podcasts, Spotify, Neuecast.app, or RSS feed URL",
+            label_visibility="collapsed",
+            key="podcast_url_input"
+        )
+        if podcast_url:
+            input_type = "url"
+            content = podcast_url
+            # Detect platform
+            if "apple.com" in podcast_url:
+                st.success("✓ Apple Podcasts detected")
+            elif "spotify.com" in podcast_url:
+                st.success("✓ Spotify detected")
+            elif "neuecast.app" in podcast_url:
+                st.success("✓ Neuecast detected")
+            elif any(x in podcast_url.lower() for x in ['.rss', '/rss', '/feed', 'feeds.']):
+                st.success("✓ RSS feed detected")
+            else:
+                st.info("ℹ️ Will attempt to process as podcast URL")
+
+    elif podcast_mode == "🎵 Direct Audio URL":
+        audio_url = st.text_input(
+            "Direct Audio URL",
+            placeholder="https://example.com/episode.mp3",
+            label_visibility="collapsed",
+            key="audio_url_input"
+        )
+        st.caption("💡 Tip: Many podcast apps let you 'Copy Episode Link' to get a direct MP3 URL")
+        if audio_url:
+            input_type = "url"
+            content = audio_url
+            if any(ext in audio_url.lower() for ext in ['.mp3', '.m4a', '.wav', '.ogg']):
+                st.success("✓ Direct audio file detected")
+            else:
+                st.info("ℹ️ Will attempt to download and transcribe")
+
+    else:  # Search by Name
+        search_query = st.text_input(
+            "Search Query",
+            placeholder="Podcast Name - topic (e.g., 'All-In - latest' or 'Huberman Lab - sleep')",
+            label_visibility="collapsed",
+            key="podcast_search_input"
+        )
+        st.caption("💡 Format: 'Podcast Name - topic' or 'Podcast Name - latest'")
+        if search_query:
+            input_type = "url"
+            content = search_query
+            st.info(f"🔍 Will search for: {search_query}")
+
+with tab_article:
+    st.markdown("### Article or Webpage")
+    st.caption("Enter any article, blog post, or webpage URL")
+    article_url = st.text_input(
+        "Article URL",
+        placeholder="https://example.com/article",
+        label_visibility="collapsed",
+        key="article_input"
+    )
+    if article_url:
+        input_type = "url"
+        content = article_url
+        st.success("✓ Article URL detected")
+
+with tab_upload:
+    st.markdown("### Upload Audio, Video, or PDF")
+    st.caption("📁 Supported: MP4, MP3, M4A, WAV, MOV, AVI, PDF (Zoom recordings, audio files, documents)")
+
     # Clear file uploader when Process Another is clicked
     file_uploader_key = "file_upload" if 'file_cleared' not in st.session_state else f"file_upload_{st.session_state.file_cleared}"
-    
+
     uploaded_file = st.file_uploader(
         "Choose a file",
         type=['mp4', 'mp3', 'm4a', 'wav', 'mov', 'avi', 'pdf'],
@@ -113,14 +200,14 @@ with tab2:
         col2.metric("💾 Size", f"{uploaded_file.size / 1024 / 1024:.1f} MB")
         col3.metric("📊 Status", "✅ Ready")
 
-with tab3:
+with tab_text:
     st.markdown("### Paste Text Content")
     st.caption("📝 Paste transcripts from Zoom, meeting notes, articles, or any text")
-    
+
     # Clear text area when Process Another is clicked
     text_value = "" if 'text_cleared' in st.session_state and st.session_state.text_cleared else None
     text_key = "text_input" if 'text_cleared' not in st.session_state else f"text_input_{st.session_state.text_cleared}"
-    
+
     text_area = st.text_area(
         "Paste content",
         value=text_value if text_value is not None else "",

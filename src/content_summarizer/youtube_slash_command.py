@@ -49,6 +49,7 @@ class ContentType(Enum):
     PODCAST = "podcast"
     PODCAST_SEARCH = "podcast_search"
     TWITTER_VIDEO = "twitter_video"
+    DIRECT_AUDIO = "direct_audio"  # Direct .mp3, .m4a, .wav, .ogg URLs
 
 
 class NLTKHelper:
@@ -106,18 +107,54 @@ def extract_video_id(url_or_id):
         raise ValueError(f"Invalid YouTube URL or video ID format: {url_or_id}")
 
 
+def is_direct_audio_url(url):
+    """Check if URL is a direct audio file link."""
+    url_lower = url.lower()
+    # Direct audio file extensions
+    audio_extensions = ('.mp3', '.m4a', '.wav', '.ogg', '.aac', '.flac')
+
+    # Check file extension (handling query strings)
+    parsed_path = urlparse(url).path.lower()
+    if any(parsed_path.endswith(ext) for ext in audio_extensions):
+        return True
+
+    # Common podcast CDN patterns that serve audio
+    audio_cdn_patterns = [
+        'traffic.megaphone.fm',
+        'dts.podtrac.com',
+        'pdst.fm',
+        'anchor.fm',
+        'buzzsprout.com',
+        'transistor.fm',
+        'simplecast.com',
+        'podbean.com',
+        'spreaker.com',
+        'libsyn.com',
+        'soundcloud.com/tracks',
+        'chtbl.com',  # Chartable redirect
+        'prfx.byspotify.com',
+    ]
+
+    if any(cdn in url_lower for cdn in audio_cdn_patterns):
+        return True
+
+    return False
+
+
 def detect_content_type(query):
     """
-    Detect whether query is a YouTube video, article, podcast URL, Twitter video, or podcast search.
-    
+    Detect whether query is a YouTube video, article, podcast URL, Twitter video,
+    direct audio file, or podcast search.
+
     Returns:
-        tuple: (ContentType, identifier) where identifier is video_id, article_url, podcast_url, twitter_url, or search_query
+        tuple: (ContentType, identifier) where identifier is video_id, article_url,
+               podcast_url, twitter_url, audio_url, or search_query
     """
     # Check for Twitter/X patterns
     if "twitter.com" in query or "x.com" in query:
         if "/status/" in query or "/i/broadcasts/" in query:
             return (ContentType.TWITTER_VIDEO, query)
-    
+
     # Check for YouTube patterns
     if "youtube.com/watch" in query or "youtu.be/" in query:
         try:
@@ -125,36 +162,46 @@ def detect_content_type(query):
             return (ContentType.VIDEO, video_id)
         except:
             pass
-    
+
     # Check if it's an 11-char video ID
     if re.match(r'^[a-zA-Z0-9_-]{11}$', query):
         return (ContentType.VIDEO, query)
-    
+
+    # NEW: Check for DIRECT AUDIO URLs first (before podcast URL check)
+    if query.startswith(('http://', 'https://')) and is_direct_audio_url(query):
+        return (ContentType.DIRECT_AUDIO, query)
+
     # Check for PODCAST URL patterns
+    # Apple Podcasts - both show and episode URLs
     if "podcasts.apple.com" in query:
         return (ContentType.PODCAST, query)
-    
+
+    # Spotify - episode URLs and show URLs
     if "spotify.com" in query and ("/episode/" in query or "/show/" in query):
         return (ContentType.PODCAST, query)
-    
+
+    # Neuecast.app - new podcast player
+    if "neuecast.app" in query:
+        return (ContentType.PODCAST, query)
+
     # RSS feed pattern
-    if query.startswith('http') and (query.endswith('.rss') or query.endswith('.xml') or 
-                                      '/rss' in query.lower() or '/feed' in query.lower() or 
+    if query.startswith('http') and (query.endswith('.rss') or query.endswith('.xml') or
+                                      '/rss' in query.lower() or '/feed' in query.lower() or
                                       'feeds.' in query.lower()):
         return (ContentType.PODCAST, query)
-    
+
     # Check if it's a valid http/https URL (article)
     if query.startswith(('http://', 'https://')):
         return (ContentType.ARTICLE, query)
-    
-    # NEW: Check if it's a podcast search query (not a URL)
+
+    # Check if it's a podcast search query (not a URL)
     # Patterns: "Podcast Name - topic", "Podcast Name: topic", "Podcast Name latest"
     podcast_search_indicators = [' - ', ': ', ' latest', ' episode ', ' about ', ' on ', ' discussing']
-    
+
     if any(indicator in query.lower() for indicator in podcast_search_indicators):
         # Likely a podcast search query
         return (ContentType.PODCAST_SEARCH, query)
-    
+
     # Default to video (for search queries)
     return (ContentType.VIDEO, query)
 
@@ -1813,8 +1860,99 @@ def find_episode_by_keyword(episodes, keyword):
     # Return if reasonable match
     if best_score >= len(keyword_words) * 0.5:  # At least 50% word overlap
         return best_match
-    
+
     return None
+
+
+def handle_direct_audio(audio_url):
+    """
+    Handle direct audio file URL (MP3, M4A, WAV, etc.).
+    Downloads the audio and transcribes it directly.
+
+    Args:
+        audio_url: Direct URL to audio file
+
+    Returns:
+        tuple: (title, transcript_text, source_label)
+    """
+    import time
+    import tempfile
+    from pathlib import Path
+
+    print(f"🎵 Processing direct audio URL...")
+    print(f"  📎 URL: {audio_url[:80]}{'...' if len(audio_url) > 80 else ''}")
+
+    # Extract title from URL path
+    parsed_url = urlparse(audio_url)
+    path_parts = parsed_url.path.split('/')
+    filename = path_parts[-1] if path_parts else 'audio'
+
+    # Clean up filename for title
+    title = filename
+    for ext in ['.mp3', '.m4a', '.wav', '.ogg', '.aac', '.flac']:
+        title = title.replace(ext, '')
+    title = title.replace('-', ' ').replace('_', ' ').strip()
+    if not title:
+        title = "Audio File"
+
+    print(f"  📝 Title: {title}")
+
+    # Create temp directory for download
+    temp_dir = Path(tempfile.mkdtemp())
+
+    # Determine file extension from URL
+    ext = '.mp3'  # Default
+    for audio_ext in ['.mp3', '.m4a', '.wav', '.ogg', '.aac', '.flac']:
+        if audio_ext in audio_url.lower():
+            ext = audio_ext
+            break
+
+    audio_path = temp_dir / f"direct_audio{ext}"
+
+    try:
+        # Download audio file
+        print(f"  📥 Downloading audio...")
+        start_time = time.time()
+
+        if not download_podcast_audio(audio_url, audio_path):
+            raise ValueError("Failed to download audio file")
+
+        download_time = time.time() - start_time
+        file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+        print(f"  ✓ Downloaded {file_size_mb:.1f} MB in {download_time:.1f}s")
+
+        # Transcribe using full pipeline (Groq → HuggingFace fallback)
+        print(f"  🎤 Transcribing audio...")
+        start_time = time.time()
+
+        transcript, mode_used = transcribe_podcast_full(audio_path, title)
+
+        if not transcript:
+            raise ValueError("Transcription failed - no transcript returned")
+
+        transcribe_time = time.time() - start_time
+        print(f"  ✓ Transcription complete ({mode_used}) in {transcribe_time:.1f}s")
+        print(f"  📊 Transcript: {len(transcript):,} characters")
+
+        # Cleanup
+        try:
+            audio_path.unlink()
+            temp_dir.rmdir()
+        except:
+            pass
+
+        label = f"Direct Audio ({mode_used.replace('_', ' ').title()})"
+        return title, transcript, label
+
+    except Exception as e:
+        # Cleanup on error
+        try:
+            if audio_path.exists():
+                audio_path.unlink()
+            temp_dir.rmdir()
+        except:
+            pass
+        raise ValueError(f"Failed to process audio: {e}")
 
 
 def handle_podcast_content(podcast_url):
@@ -2138,34 +2276,63 @@ def handle_podcast_search(search_query):
         for i, p in enumerate(podcasts[:3], 1):
             print(f"     {i}. {p['title']} ({p['total_episodes']} episodes)")
 
-        # Find best match by name similarity
-        def name_similarity(title, search):
-            """Calculate simple name match score"""
-            title_lower = title.lower()
-            search_lower = search.lower()
+        # Find best match by name similarity using fuzzy matching
+        from difflib import SequenceMatcher
+
+        def fuzzy_match_score(title, search):
+            """
+            Calculate fuzzy match score using multiple techniques.
+            Returns score 0-100 where 100 is perfect match.
+            """
+            title_lower = title.lower().strip()
+            search_lower = search.lower().strip()
+
             # Exact match
             if search_lower == title_lower:
                 return 100
-            # Search term is contained in title
+
+            # Calculate base similarity using SequenceMatcher
+            base_ratio = SequenceMatcher(None, search_lower, title_lower).ratio()
+
+            # Bonus for substring match
+            substring_bonus = 0
             if search_lower in title_lower:
-                return 80
-            # Title starts with search term
-            if title_lower.startswith(search_lower):
-                return 70
-            # Word overlap
+                substring_bonus = 25
+            elif title_lower.startswith(search_lower):
+                substring_bonus = 20
+
+            # Word overlap bonus
             search_words = set(search_lower.split())
             title_words = set(title_lower.split())
-            overlap = len(search_words & title_words) / max(len(search_words), 1)
-            return int(overlap * 60)
+            if search_words:
+                word_overlap = len(search_words & title_words) / len(search_words)
+                word_bonus = word_overlap * 15
+            else:
+                word_bonus = 0
+
+            # Combine scores
+            final_score = (base_ratio * 60) + substring_bonus + word_bonus
+
+            return min(100, int(final_score))
 
         # Score and sort podcasts
-        scored = [(p, name_similarity(p['title'], podcast_name)) for p in podcasts]
+        scored = [(p, fuzzy_match_score(p['title'], podcast_name)) for p in podcasts]
         scored.sort(key=lambda x: x[1], reverse=True)
+
+        # Show scores for debugging
+        print(f"  📊 Match scores:")
+        for p, score in scored[:3]:
+            print(f"     • {p['title'][:40]}{'...' if len(p['title']) > 40 else ''} → {score}%")
+
         podcast = scored[0][0]
         match_score = scored[0][1]
         podcast_id = podcast['id']
 
-        print(f"  ✓ Best match: {podcast['title']} (score: {match_score})")
+        # Warn if match score is low
+        if match_score < 50:
+            print(f"  ⚠️  Low confidence match ({match_score}%) - results may not be accurate")
+
+        print(f"  ✓ Selected: {podcast['title']} (score: {match_score}%)")
         print(f"  📊 {podcast['total_episodes']} episodes available")
         
         # Step 2: Get recent episodes
@@ -3004,6 +3171,8 @@ def handle_youtube_command(args):
         print(f"Detected content type: podcast (URL)")
     elif content_type == ContentType.PODCAST_SEARCH:
         print(f"Detected content type: podcast (search query)")
+    elif content_type == ContentType.DIRECT_AUDIO:
+        print(f"Detected content type: direct audio file")
     elif content_type == ContentType.TWITTER_VIDEO:
         print(f"Detected content type: Twitter/X video")
     else:
@@ -3094,7 +3263,33 @@ def handle_youtube_command(args):
         except Exception as e:
             print(f"Error processing podcast search: {e}", file=sys.stderr)
             return 1
-    
+
+    elif content_type == ContentType.DIRECT_AUDIO:
+        # Direct audio file pipeline
+        try:
+            content_title, content_text, content_label = handle_direct_audio(identifier)
+            source_url = identifier
+            source_id = None
+
+            word_count_actual = len(content_text.split())
+            print(f"✓ Audio processed ({len(content_text)} characters, {word_count_actual} words)")
+            print(f"Title: {content_title}")
+
+            # Assess content quality
+            quality_warnings = assess_content_quality(content_text, "audio")
+            if quality_warnings:
+                print("\nContent Quality Notes:")
+                for warning in quality_warnings:
+                    print(f"  {warning}")
+            print()
+
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Error processing audio file: {e}", file=sys.stderr)
+            return 1
+
     elif content_type == ContentType.TWITTER_VIDEO:
         # Twitter/X video pipeline
         try:
