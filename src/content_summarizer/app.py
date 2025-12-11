@@ -311,7 +311,7 @@ def process_url(url, words):
             "--format", "md",
             "--words", str(words),
             "--ai-provider", os.getenv("AI_PROVIDER", "groq"),
-            "--ai-model", os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+            "--ai-model", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         ]
         
         status_placeholder.info("📥 Fetching content...")
@@ -534,7 +534,7 @@ try:
     
     # Summarize
     print("Starting summarization...", file=sys.stderr)
-    summarizer = AITranscriptSummarizer(provider='groq', model='llama-3.1-8b-instant')
+    summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
     takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5)
     summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words})
     
@@ -602,7 +602,7 @@ try:
     
     # Summarize
     print("Starting summarization...", file=sys.stderr)
-    summarizer = AITranscriptSummarizer(provider='groq', model='llama-3.1-8b-instant')
+    summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
     takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5)
     summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words})
     
@@ -774,7 +774,7 @@ transcript = base64.b64decode("{encoded_text}").decode('utf-8')
 title = "Pasted Content"
 
 try:
-    summarizer = AITranscriptSummarizer(provider='groq', model='llama-3.1-8b-instant')
+    summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
     takeaways = summarizer.generate_key_takeaways(transcript, title, count=5)
     summary = summarizer.generate_executive_summary(transcript, title, word_count={words})
     

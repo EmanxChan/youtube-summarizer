@@ -61,7 +61,7 @@ def _process_url(url: str, words: int, api_key: str, script_module: str) -> Dict
         "--format", "md",
         "--words", str(words),
         "--ai-provider", os.getenv("AI_PROVIDER", "groq"),
-        "--ai-model", os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+        "--ai-model", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     ]
     
     try:
