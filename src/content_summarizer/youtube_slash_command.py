@@ -35,7 +35,6 @@ except ImportError:
 # Try to import Listen Notes integration (optional)
 try:
     from content_summarizer.listen_notes_client import ListenNotesClient
-    from content_summarizer.podcast_cache import PodcastCache
     from content_summarizer.transcript_metrics import TranscriptMetrics
     LISTEN_NOTES_AVAILABLE = True
 except ImportError:
@@ -100,6 +99,10 @@ def extract_video_id(url_or_id):
         return parse_qs(parsed.query)["v"][0]
     elif "youtu.be/" in url_or_id:
         return url_or_id.split("youtu.be/")[1].split("?")[0]
+    elif "youtube.com/live/" in url_or_id:
+        # Handle YouTube Live URLs: youtube.com/live/VIDEO_ID
+        live_part = url_or_id.split("youtube.com/live/")[1]
+        return live_part.split("?")[0].split("/")[0]
     elif re.match(r'^[a-zA-Z0-9_-]{11}$', url_or_id):
         # Already a video ID
         return url_or_id
@@ -155,8 +158,8 @@ def detect_content_type(query):
         if "/status/" in query or "/i/broadcasts/" in query:
             return (ContentType.TWITTER_VIDEO, query)
 
-    # Check for YouTube patterns
-    if "youtube.com/watch" in query or "youtu.be/" in query:
+    # Check for YouTube patterns (including live streams)
+    if "youtube.com/watch" in query or "youtu.be/" in query or "youtube.com/live/" in query:
         try:
             video_id = extract_video_id(query)
             return (ContentType.VIDEO, video_id)
@@ -997,13 +1000,6 @@ def find_youtube_mirror(podcast_title, episode_title=None):
         return None
 
 
-def get_cache_dir():
-    """Get or create cache directory for transcripts"""
-    cache_dir = Path.home() / ".cache" / "podcast_transcripts"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
-
-
 def get_ai_cache_dir():
     """Get or create cache directory for AI responses"""
     cache_dir = Path.home() / ".cache" / "ai_summaries"
@@ -1045,38 +1041,6 @@ def save_ai_response(content_text, operation, params, result):
             json.dump({'result': result, 'operation': operation, 'params': params}, f)
     except Exception as e:
         print(f"  ⚠️ Cache write failed: {e}", file=sys.stderr)
-
-
-def get_cached_transcript(audio_url):
-    """Check if transcript is already cached"""
-    import hashlib
-    
-    # Create cache key from audio URL
-    cache_key = hashlib.md5(audio_url.encode()).hexdigest()
-    cache_file = get_cache_dir() / f"{cache_key}.txt"
-    
-    if cache_file.exists():
-        try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                return f.read()
-        except:
-            pass
-    
-    return None
-
-
-def save_cached_transcript(audio_url, transcript):
-    """Save transcript to cache"""
-    import hashlib
-    
-    cache_key = hashlib.md5(audio_url.encode()).hexdigest()
-    cache_file = get_cache_dir() / f"{cache_key}.txt"
-    
-    try:
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            f.write(transcript)
-    except Exception as e:
-        print(f"  ⚠️ Could not cache transcript: {e}")
 
 
 def download_podcast_audio(audio_url, output_path):
@@ -1979,56 +1943,38 @@ def handle_podcast_content(podcast_url):
     
     if LISTEN_NOTES_AVAILABLE:
         print("  🏷️  [Primary] Checking Listen Notes API...")
-        
-        podcast_cache = PodcastCache(provider='listen_notes')
-        
-        # Check cache first
-        cached = podcast_cache.get(podcast_url)
-        if cached:
-            audio_url = cached.get('audio_url')
-            episode_title = cached.get('title')
-            podcast_title = cached.get('podcast_title')
-            if audio_url:
-                print(f"  ✓ Listen Notes metadata cached (audio URL found)")
+
+        start_time = time.time()
+        try:
+            listen_notes_client = ListenNotesClient()
+            result = listen_notes_client.get_episode_by_url(podcast_url)
+            duration = time.time() - start_time
+
+            if result and result.get('audio_url'):
+                audio_url = result['audio_url']
+                episode_title = result.get('title', 'Unknown Episode')
+                podcast_title = result.get('podcast_title', '')
+
+                print(f"  ✓ Listen Notes API success! ({duration:.1f}s)")
+
+                # Record metrics
                 if metrics:
-                    metrics.record('listen_notes_api_cached', podcast_url, True, 0.1)
-        
-        # Query Listen Notes API if not cached
-        if not audio_url:
-            start_time = time.time()
-            try:
-                listen_notes_client = ListenNotesClient()
-                result = listen_notes_client.get_episode_by_url(podcast_url)
-                duration = time.time() - start_time
-                
-                if result and result.get('audio_url'):
-                    audio_url = result['audio_url']
-                    episode_title = result.get('title', 'Unknown Episode')
-                    podcast_title = result.get('podcast_title', '')
-                    
-                    print(f"  ✓ Listen Notes API success! ({duration:.1f}s)")
-                    
-                    # Cache the result
-                    podcast_cache.set(podcast_url, result)
-                    
-                    # Record metrics
-                    if metrics:
-                        metrics.record('listen_notes_api', podcast_url, True, duration)
-                    
-                    # Show quota status
-                    ln_metrics = listen_notes_client.get_metrics()
-                    if ln_metrics.get('quota_remaining'):
-                        print(f"  📊 Listen Notes quota: {ln_metrics['requests_made']} used | {ln_metrics['quota_remaining']} remaining")
-                else:
-                    print(f"  ℹ️  Listen Notes: No audio URL found")
-                    if metrics:
-                        metrics.record('listen_notes_api', podcast_url, False, duration)
-                    
-            except Exception as e:
-                duration = time.time() - start_time
-                print(f"  ⚠️  Listen Notes API error: {e}")
+                    metrics.record('listen_notes_api', podcast_url, True, duration)
+
+                # Show quota status
+                ln_metrics = listen_notes_client.get_metrics()
+                if ln_metrics.get('quota_remaining'):
+                    print(f"  📊 Listen Notes quota: {ln_metrics['requests_made']} used | {ln_metrics['quota_remaining']} remaining")
+            else:
+                print(f"  ℹ️  Listen Notes: No audio URL found")
                 if metrics:
                     metrics.record('listen_notes_api', podcast_url, False, duration)
+
+        except Exception as e:
+            duration = time.time() - start_time
+            print(f"  ⚠️  Listen Notes API error: {e}")
+            if metrics:
+                metrics.record('listen_notes_api', podcast_url, False, duration)
     
     print(f"  🔄 Trying fallback methods...\n")
     
@@ -2161,13 +2107,6 @@ def handle_podcast_content(podcast_url):
             "This podcast may not provide direct audio access."
         )
 
-    # Check cache first
-    print(f"  💾 Checking transcript cache...")
-    cached = get_cached_transcript(audio_url)
-    if cached:
-        print(f"  ✓ Found cached transcript!")
-        return title, cached, "Podcast Transcript (Cached)"
-
     # Download audio
     print(f"  📥 Downloading podcast audio...")
     import tempfile
@@ -2192,10 +2131,6 @@ def handle_podcast_content(podcast_url):
             # Record metrics
             if metrics:
                 metrics.record(mode_used, podcast_url, True, duration)
-
-            # Cache the transcript
-            print(f"  💾 Caching transcript...")
-            save_cached_transcript(audio_url, transcript)
 
             # Cleanup
             try:
@@ -2257,11 +2192,9 @@ def handle_podcast_search(search_query):
     
     try:
         from content_summarizer.listen_notes_client import ListenNotesClient
-        from content_summarizer.podcast_cache import PodcastCache
-        
+
         client = ListenNotesClient()
-        cache = PodcastCache(provider='listen_notes')
-        
+
         # Step 1: Search for podcast
         print(f"  🔍 Searching Listen Notes for: {podcast_name}")
         start_time = time.time()
@@ -2370,19 +2303,7 @@ def handle_podcast_search(search_query):
         audio_url = matched_episode.get('audio_url')
         episode_title = matched_episode['title']
 
-        # Step 5: Check if we have cached transcript
-        cache_key = f"episode_{matched_episode['episode_id']}"
-        cached = cache.get(cache_key)
-
-        if cached and cached.get('transcript'):
-            print(f"  💾 Using cached transcript")
-            return (
-                episode_title,
-                cached['transcript'],
-                "Podcast Transcript (Cached)"
-            )
-
-        # Step 6: Try YouTube mirror first (free, fast, high quality)
+        # Step 5: Try YouTube mirror first (free, fast, high quality)
         print(f"  📺 Checking for YouTube mirror...")
         yt_video_id, yt_title = search_youtube_for_podcast(podcast['title'], episode_title)
 
@@ -2390,17 +2311,11 @@ def handle_podcast_search(search_query):
             yt_transcript = get_youtube_transcript_for_podcast(yt_video_id)
             if yt_transcript and len(yt_transcript) > 500:
                 print(f"  ✓ Got transcript from YouTube!")
-                # Cache it
-                cache.set(cache_key, {
-                    'transcript': yt_transcript,
-                    'title': episode_title,
-                    'source': 'youtube_mirror'
-                })
                 if metrics:
                     metrics.record('youtube_mirror', search_query, True, time.time() - start_time)
                 return episode_title, yt_transcript, "Podcast Transcript (YouTube Mirror)"
 
-        # Step 7: Download audio and transcribe with full pipeline
+        # Step 6: Download audio and transcribe with full pipeline
         if not audio_url:
             raise ValueError("No audio URL available for this episode and no YouTube mirror found.")
 
@@ -2427,17 +2342,10 @@ def handle_podcast_search(search_query):
 
             if transcript:
                 print(f"  ✓ Full transcription complete ({mode_used})!")
-                
+
                 if metrics:
                     metrics.record('whisper', search_query, True, duration)
-                
-                # Cache the transcript
-                cache.set(cache_key, {
-                    'transcript': transcript,
-                    'title': episode_title,
-                    'audio_url': audio_url
-                })
-                
+
                 # Cleanup
                 try:
                     audio_path.unlink()
