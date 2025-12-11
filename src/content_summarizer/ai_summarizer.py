@@ -196,57 +196,58 @@ Content: {transcript}
 
 Generate exactly {count} insights that capture the deepest concepts, principles, and strategic implications from this content.
 
+EMOJI REQUIREMENT - Start EACH insight with ONE relevant emoji from this palette:
+🎯 = Core concept, main point, key takeaway
+💡 = Revelation, aha moment, new perspective
+⚠️ = Warning, tradeoff, limitation, risk
+🔄 = Process, cycle, feedback loop, iteration
+📈 = Growth, improvement, scaling, progress
+🧠 = Mental model, framework, thinking pattern
+⏱️ = Timing, when to act, temporal insight
+🔗 = Connection, relationship, dependency
+💰 = Value, ROI, cost-benefit, investment
+🛡️ = Protection, defense, risk mitigation
+🔑 = Unlock, enabler, critical factor
+✨ = Opportunity, potential, possibility
+
+Choose the emoji that BEST matches the insight's core message.
+
 CRITICAL REQUIREMENTS - Each insight MUST:
 
-1. **Reveal underlying mechanisms** - Explain WHY something works at a fundamental level, not just WHAT happens
-2. **Include tradeoffs or limitations** - Show the costs, constraints, or boundaries (nothing is universally good)
-3. **Provide non-obvious implications** - Surface surprising consequences or counterintuitive aspects
-4. **Use specific examples** - Reference concrete situations or scenarios from the content
-5. **Be memorable and distinctive** - Should stick in someone's mind, not be generic
-6. **Show strategic context** - Explain when/where this matters and when it doesn't
+1. **Start with ONE emoji** from the palette above
+2. **Reveal underlying mechanisms** - Explain WHY something works, not just WHAT
+3. **Include tradeoffs or limitations** - Nothing is universally good
+4. **Be non-obvious** - Surface surprising or counterintuitive aspects
+5. **Use specific examples** - Reference concrete situations from the content
+6. **Be memorable** - Should stick in someone's mind
 
 LENGTH: 30-40 words per insight (2-3 sentences)
 
 AVOID AT ALL COSTS:
-- Generic truisms ("X improves Y", "Using Z helps achieve better results")
+- Generic truisms ("X improves Y")
 - Obvious statements anyone would know
-- Action verbs (Learn, Master, Implement, Use)
+- Starting with action verbs (Learn, Master, Implement)
 - Vague platitudes without specifics
-- Surface-level descriptions
-
-QUALITY TEST:
-Ask yourself: "Would an expert in this field find this insight valuable, or would they say 'obviously'?"
-Only include insights that pass this test.
 
 EXAMPLES OF EXCELLENT INSIGHTS:
 
-BAD (Generic):
-"Planning with AI is more efficient than jumping straight to coding for complex features."
+BAD: "Planning with AI is more efficient than jumping straight to coding."
 
-GOOD (Insightful):
-"AI code assistants front-load cognitive work—requiring extensive upfront context through research strategies—because they lack the implicit codebase understanding developers build through daily immersion, creating a fundamental inversion where setup investment determines long-term leverage rather than immediate productivity."
+GOOD: "🔄 AI code assistants front-load cognitive work—requiring extensive upfront context—because they lack implicit codebase understanding, creating a fundamental inversion where setup investment determines long-term leverage rather than immediate productivity."
 
----
+BAD: "Research strategies help an AI learn patterns in a codebase."
 
-BAD (Generic):
-"Eight research strategies help an AI learn patterns and preferences in a codebase."
+GOOD: "🧠 Multiple research strategies exist because no single approach captures both explicit patterns (what code does) and implicit taste (how teams prefer it), requiring triangulation through complementary lenses like anthropologists studying culture."
 
-GOOD (Insightful):
-"Multiple research strategies exist because no single approach captures both explicit patterns (what the code does) and implicit taste (how the team prefers to do it), requiring AI systems to triangulate understanding through complementary lenses much like anthropologists studying a culture through multiple methodologies."
+BAD: "Expanding the AI's knowledge improves performance over time."
+
+GOOD: "📈 AI assistants demonstrate compound learning where initial context-gathering creates diminishing returns on individual queries but exponential improvements in decision quality, inverting the typical tool learning curve."
 
 ---
 
-BAD (Generic):
-"Continually refining and expanding the AI's knowledge base improves its performance over time."
+Generate {count} insights matching this quality standard. Each must start with ONE emoji and be profound enough that an expert would pause and think.
 
-GOOD (Insightful):
-"AI code assistants demonstrate a compound learning curve where initial context-gathering creates diminishing returns on individual queries but exponential improvements in decision quality over time, inverting the typical tool learning curve where early investment yields immediate payoff."
-
----
-
-Now generate {count} insights that match this EXCELLENT quality standard. Each insight should be profound enough that an expert would pause and think "I hadn't considered it that way."
-
-Return ONLY the {count} insights, one per line, without numbers or bullet points."""
+Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight text."""
 
         try:
             if self.provider in ["openai", "deepseek", "groq"]:
@@ -286,21 +287,34 @@ Return ONLY the {count} insights, one per line, without numbers or bullet points
                 return []
             
             # Parse the response into individual takeaways
+            import re
             raw_lines = [line.strip() for line in content.strip().split('\n') if line.strip()]
-            
-            # Clean up and format
+
+            # Clean up and format while preserving emojis
             cleaned_takeaways = []
+            # Emoji pattern to detect if line starts with emoji
+            emoji_pattern = r'^[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]'
+
             for line in raw_lines:
-                # Remove leading numbers, bullets, asterisks, etc.
-                takeaway = line.lstrip('0123456789.-•* \t')
-                # Also handle formats like "1)" or "1."
-                import re
-                takeaway = re.sub(r'^\d+[\.\)]\s*', '', takeaway)
+                # Remove leading numbers, bullets, asterisks but PRESERVE emojis
+                # First check if line starts with emoji
+                starts_with_emoji = re.match(emoji_pattern, line)
+
+                if starts_with_emoji:
+                    # Line already starts with emoji, just clean up any numbering after emoji
+                    # e.g., "🎯 1. insight" -> "🎯 insight"
+                    takeaway = re.sub(r'^([\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]+)\s*\d*[\.\)]*\s*', r'\1 ', line)
+                else:
+                    # No emoji, clean up numbering
+                    takeaway = line.lstrip('0123456789.-•* \t')
+                    takeaway = re.sub(r'^\d+[\.\)]\s*', '', takeaway)
+
+                takeaway = takeaway.strip()
                 if takeaway and len(takeaway) > 10:  # Skip empty or too-short lines
                     cleaned_takeaways.append(takeaway)
                 if len(cleaned_takeaways) >= count:
                     break
-            
+
             return cleaned_takeaways[:count]
             
         except Exception as e:
@@ -394,8 +408,162 @@ Return ONLY the summary text with paragraph breaks, no headers or labels."""
         except Exception as e:
             print(f"Error generating summary: {e}", file=sys.stderr)
             return ""
-    
-    def generate_next_steps(self, transcript: str, video_title: str, 
+
+    def generate_highlights(self, transcript: str, video_title: str,
+                           content_type: str = "video",
+                           timestamp_data: List[Dict] = None,
+                           count: int = 7) -> List[str]:
+        """
+        Generate key highlights with timestamps (video/podcast) or quotes (article).
+
+        Args:
+            transcript: The full transcript text
+            video_title: Title of the content
+            content_type: One of "video", "podcast", "article"
+            timestamp_data: List of dicts with 'text', 'start' (seconds) for timed content
+            count: Number of highlights to generate (default 7)
+
+        Returns:
+            List of highlight strings with timestamps or quotes
+        """
+        import re
+
+        # Limit transcript
+        max_chars = 15000
+        if len(transcript) > max_chars:
+            transcript = transcript[:max_chars]
+
+        # Build timestamp context if available
+        timestamp_context = ""
+        if timestamp_data and content_type in ["video", "podcast"]:
+            # Create a reference of timestamps for the AI
+            timestamp_refs = []
+            for item in timestamp_data[:100]:  # Limit to first 100 segments
+                start_sec = item.get('start', 0)
+                mins = int(start_sec // 60)
+                secs = int(start_sec % 60)
+                timestamp_refs.append(f"[{mins}:{secs:02d}] {item.get('text', '')[:50]}")
+            timestamp_context = "\n".join(timestamp_refs[:50])
+
+        if content_type in ["video", "podcast"]:
+            prompt = f"""You are an expert content curator identifying the most impactful moments from this {content_type}.
+
+Title: {video_title}
+Content: {transcript}
+
+{"Timestamp References (use these exact timestamps when possible):" + chr(10) + timestamp_context if timestamp_context else ""}
+
+Identify exactly {count} HIGHLIGHTS - the most memorable, quotable, or significant moments.
+
+REQUIREMENTS:
+1. Each highlight should be a key moment, powerful quote, or critical insight
+2. Format each as: [MM:SS] "Quote or description of moment"
+3. Mix of ACTUAL QUOTES (in quotation marks) and moment descriptions
+4. Spread highlights across the content (beginning, middle, end)
+5. Prioritize moments that are surprising, actionable, or emotionally resonant
+
+EXAMPLE FORMAT:
+[2:15] "The biggest mistake people make is thinking they need permission to start"
+[8:42] Key framework introduction: the 3-step process for decision making
+[15:30] "If you're not embarrassed by the first version, you launched too late"
+[23:18] Practical demonstration of the technique in action
+[31:05] Summary of the core principles with real-world applications
+
+Return ONLY {count} highlights, one per line. Use [MM:SS] format for timestamps."""
+
+        else:  # article
+            prompt = f"""You are an expert content curator identifying the most impactful passages from this article.
+
+Title: {video_title}
+Content: {transcript}
+
+Identify exactly {count} HIGHLIGHTS - the most memorable quotes and key passages.
+
+REQUIREMENTS:
+1. Each highlight should be a powerful quote or critical insight
+2. Mix of ACTUAL QUOTES (verbatim from text, in quotation marks) and paraphrased key points
+3. For quotes: Use exact words from the article
+4. For key points: Summarize in a compelling way
+5. Spread highlights across the article
+6. Prioritize passages that are surprising, actionable, or thought-provoking
+
+EXAMPLE FORMAT:
+> "Success is not final, failure is not fatal: it is the courage to continue that counts."
+> Key insight: The author argues that consistency beats intensity in every measurable outcome
+> "The difference between ordinary and extraordinary is that little extra"
+> Framework: Three pillars of sustainable growth - patience, persistence, and adaptability
+
+Return ONLY {count} highlights, one per line. Use > prefix for each."""
+
+        try:
+            if self.provider in ["openai", "deepseek", "groq"]:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert at identifying the most impactful moments and quotes from content."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.5,
+                    max_tokens=800
+                )
+                content = response.choices[0].message.content
+
+            elif self.provider == "anthropic":
+                response = self.client.messages.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=800,
+                    temperature=0.5
+                )
+                content = response.content[0].text
+
+            elif self.provider == "ollama":
+                import requests
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False
+                    }
+                )
+                content = response.json()["response"]
+
+            else:
+                return []
+
+            # Parse highlights
+            raw_lines = [line.strip() for line in content.strip().split('\n') if line.strip()]
+            highlights = []
+
+            for line in raw_lines:
+                # Clean up numbering but preserve [timestamps] and > quotes
+                cleaned = re.sub(r'^\d+[\.\)]\s*', '', line)
+                cleaned = cleaned.strip()
+
+                if cleaned and len(cleaned) > 5:
+                    # Ensure proper formatting
+                    if content_type in ["video", "podcast"]:
+                        # Should start with [timestamp] or add placeholder
+                        if not cleaned.startswith('['):
+                            cleaned = "[--:--] " + cleaned
+                    else:
+                        # Should start with > for articles
+                        if not cleaned.startswith('>'):
+                            cleaned = "> " + cleaned
+
+                    highlights.append(cleaned)
+
+                if len(highlights) >= count:
+                    break
+
+            return highlights[:count]
+
+        except Exception as e:
+            print(f"Error generating highlights: {e}", file=sys.stderr)
+            return []
+
+    def generate_next_steps(self, transcript: str, video_title: str,
                            takeaways: List[str]) -> List[str]:
         """
         Generate actionable next steps based on the video content.
