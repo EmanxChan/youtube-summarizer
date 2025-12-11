@@ -84,6 +84,9 @@ tab_yt, tab_podcast, tab_article, tab_upload, tab_text = st.tabs([
 input_type = None
 content = None
 
+# Use dynamic keys for inputs so they clear when "Process Another" is clicked
+input_counter = st.session_state.get('input_cleared', 0)
+
 with tab_yt:
     st.markdown("### YouTube Video")
     st.caption("Enter a YouTube URL or video ID to summarize")
@@ -91,7 +94,7 @@ with tab_yt:
         "YouTube URL",
         placeholder="https://youtube.com/watch?v=... or https://youtu.be/...",
         label_visibility="collapsed",
-        key="youtube_input"
+        key=f"youtube_input_{input_counter}"
     )
     if yt_input:
         input_type = "url"
@@ -109,7 +112,7 @@ with tab_podcast:
         ["🔗 Podcast URL", "🎵 Direct Audio URL", "🔍 Search by Name"],
         horizontal=True,
         label_visibility="collapsed",
-        key="podcast_mode"
+        key=f"podcast_mode_{input_counter}"
     )
 
     if podcast_mode == "🔗 Podcast URL":
@@ -117,7 +120,7 @@ with tab_podcast:
             "Podcast URL",
             placeholder="Apple Podcasts, Spotify, Neuecast.app, or RSS feed URL",
             label_visibility="collapsed",
-            key="podcast_url_input"
+            key=f"podcast_url_input_{input_counter}"
         )
         if podcast_url:
             input_type = "url"
@@ -139,7 +142,7 @@ with tab_podcast:
             "Direct Audio URL",
             placeholder="https://example.com/episode.mp3",
             label_visibility="collapsed",
-            key="audio_url_input"
+            key=f"audio_url_input_{input_counter}"
         )
         st.caption("💡 Tip: Many podcast apps let you 'Copy Episode Link' to get a direct MP3 URL")
         if audio_url:
@@ -155,7 +158,7 @@ with tab_podcast:
             "Search Query",
             placeholder="Podcast Name - topic (e.g., 'All-In - latest' or 'Huberman Lab - sleep')",
             label_visibility="collapsed",
-            key="podcast_search_input"
+            key=f"podcast_search_input_{input_counter}"
         )
         st.caption("💡 Format: 'Podcast Name - topic' or 'Podcast Name - latest'")
         if search_query:
@@ -170,7 +173,7 @@ with tab_article:
         "Article URL",
         placeholder="https://example.com/article",
         label_visibility="collapsed",
-        key="article_input"
+        key=f"article_input_{input_counter}"
     )
     if article_url:
         input_type = "url"
@@ -485,8 +488,11 @@ def display_url_results():
         </style>
         """, unsafe_allow_html=True)
         if st.button("📝 Process Another", type="secondary", use_container_width=True, key="process_another_url"):
-            # Clear session state
+            # Clear ALL session state for inputs
             st.session_state.last_result = None
+            st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
+            st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
+            st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
             st.rerun()
         
         st.markdown("---")
@@ -1009,9 +1015,11 @@ if 'file_result' in st.session_state and st.session_state.file_result:
     </style>
     """, unsafe_allow_html=True)
     if st.button("📝 Process Another", type="secondary", use_container_width=True, key="process_another_file"):
-        # Clear session state and increment file cleared counter
+        # Clear ALL session state for inputs
         st.session_state.file_result = None
+        st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
+        st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
     
     st.markdown("---")
@@ -1048,8 +1056,10 @@ if 'text_result' in st.session_state and st.session_state.text_result:
     </style>
     """, unsafe_allow_html=True)
     if st.button("📝 Process Another", type="secondary", use_container_width=True, key="process_another_text"):
-        # Clear session state and set text cleared flag
+        # Clear ALL session state for inputs
         st.session_state.text_result = None
+        st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
+        st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
     
