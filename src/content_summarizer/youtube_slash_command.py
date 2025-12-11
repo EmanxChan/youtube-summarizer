@@ -2492,193 +2492,149 @@ def fetch_transcript_ytdlp(video_id):
         return None
 
 
-def _get_youtube_cookies():
-    """
-    Get cookies for YouTube requests.
-    Checks for cookies file or generates consent cookies.
-    """
-    import http.cookiejar
-
-    # Check for user-provided cookies file
-    cookies_path = os.environ.get('YOUTUBE_COOKIES_PATH')
-    if cookies_path and os.path.exists(cookies_path):
-        try:
-            cookies = http.cookiejar.MozillaCookieJar(cookies_path)
-            cookies.load()
-            return cookies_path
-        except Exception as e:
-            print(f"  ⚠️ Could not load cookies file: {e}", file=sys.stderr)
-
-    return None
-
-
-def _get_transcript_with_fallbacks(video_id, languages=None):
-    """
-    Internal function to get transcript with multiple fallback strategies.
-
-    Args:
-        video_id: YouTube video ID
-        languages: List of language codes to try
-
-    Returns:
-        list: Transcript data (list of dicts with 'text', 'start', 'duration')
-
-    Raises:
-        Exception with user-friendly message on failure
-    """
-    if languages is None:
-        languages = ['en', 'en-US', 'en-GB', 'en-AU', 'en-CA']
-
-    cookies = _get_youtube_cookies()
-    proxy = os.environ.get('YOUTUBE_PROXY')
-    proxies = {'https': proxy, 'http': proxy} if proxy else None
-
-    errors_encountered = []
-
-    # Strategy 1: Direct get_transcript with cookies/proxy
-    try:
-        transcript_data = YouTubeTranscriptApi.get_transcript(
-            video_id,
-            languages=languages,
-            cookies=cookies,
-            proxies=proxies
-        )
-        return transcript_data
-    except TranscriptsDisabled:
-        raise Exception(
-            "Transcripts are disabled for this video. "
-            "The video owner has turned off captions/subtitles."
-        )
-    except NoTranscriptFound:
-        errors_encountered.append("no_transcript_direct")
-    except Exception as e:
-        error_str = str(e).lower()
-        if '403' in str(e) or 'forbidden' in error_str:
-            errors_encountered.append(f"blocked_403: {e}")
-        elif '429' in str(e) or 'too many' in error_str:
-            errors_encountered.append(f"rate_limited: {e}")
-        else:
-            errors_encountered.append(f"direct_method: {e}")
-
-    # Strategy 2: List transcripts and find best match
-    try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(
-            video_id,
-            cookies=cookies,
-            proxies=proxies
-        )
-
-        # Try manual transcripts first (higher quality)
-        try:
-            transcript = transcript_list.find_manually_created_transcript(languages)
-            return transcript.fetch()
-        except:
-            pass
-
-        # Try auto-generated transcripts
-        try:
-            transcript = transcript_list.find_generated_transcript(languages)
-            return transcript.fetch()
-        except:
-            pass
-
-        # Try any available transcript
-        available = list(transcript_list)
-        if available:
-            # Prefer English variants
-            for t in available:
-                if t.language_code.startswith('en'):
-                    return t.fetch()
-            # Use first available
-            return available[0].fetch()
-
-    except TranscriptsDisabled:
-        raise Exception(
-            "Transcripts are disabled for this video. "
-            "The video owner has turned off captions/subtitles."
-        )
-    except Exception as e:
-        errors_encountered.append(f"list_method: {e}")
-
-    # Strategy 3: yt-dlp fallback
-    print("  Trying yt-dlp fallback...", file=sys.stderr)
-    try:
-        fallback_text = fetch_transcript_ytdlp(video_id)
-        if fallback_text and len(fallback_text) > 50:
-            # Convert to transcript_data format
-            return [{'text': fallback_text, 'start': 0, 'duration': 0}]
-    except Exception as e:
-        errors_encountered.append(f"ytdlp: {e}")
-
-    # All methods failed - provide helpful error message
-    error_summary = "; ".join(errors_encountered[-3:])  # Last 3 errors
-
-    if any('403' in e or 'forbidden' in e.lower() for e in errors_encountered):
-        raise Exception(
-            f"YouTube is blocking transcript requests (403 Forbidden). "
-            f"This can happen due to rate limiting or regional restrictions. "
-            f"Try again in a few minutes, use a VPN, or set YOUTUBE_COOKIES_PATH "
-            f"to a cookies.txt file exported from your browser. "
-            f"Details: {error_summary}"
-        )
-    elif any('429' in e or 'too many' in e.lower() for e in errors_encountered):
-        raise Exception(
-            f"YouTube rate limit reached (429 Too Many Requests). "
-            f"Please wait a few minutes before trying again. "
-            f"Details: {error_summary}"
-        )
-    else:
-        raise Exception(
-            f"Could not retrieve transcript for this video. "
-            f"The video may not have captions available, or YouTube may be "
-            f"blocking requests. Try a different video or wait a few minutes. "
-            f"Details: {error_summary}"
-        )
-
-
 def fetch_transcript(video_id):
-    """
-    Fetch transcript using enhanced multi-method approach.
-
-    Supports:
-    - Multiple language fallbacks
-    - Cookie authentication (set YOUTUBE_COOKIES_PATH)
-    - Proxy support (set YOUTUBE_PROXY)
-    - yt-dlp fallback for blocked requests
-
-    Returns:
-        str: Full transcript text
-
-    Raises:
-        Exception with user-friendly message on failure
-    """
-    transcript_data = _get_transcript_with_fallbacks(video_id)
-    full_transcript = " ".join([item['text'] for item in transcript_data])
-    return full_transcript
+    """Fetch transcript using enhanced multi-method approach with retry"""
+    max_retries = 3
+    retry_count = 0
+    base_delay = 30
+    
+    while retry_count < max_retries:
+        try:
+            # Method 1: youtube-transcript-api
+            transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+            full_transcript = " ".join([item['text'] for item in transcript_data])
+            return full_transcript
+            
+        except AttributeError:
+            # Try newer API method
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                
+                # Try to find English transcript first
+                try:
+                    transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+                    transcript_data = transcript.fetch()
+                except:
+                    # Use first available transcript or auto-generated
+                    available = list(transcript_list)
+                    if not available:
+                        raise NoTranscriptFound(video_id)
+                    
+                    transcript = available[0]
+                    transcript_data = transcript.fetch()
+                
+                full_transcript = " ".join([item['text'] for item in transcript_data])
+                return full_transcript
+                
+            except Exception as e:
+                raise Exception(f"Alternative method failed: {e}")
+                
+        except TranscriptsDisabled:
+            raise Exception("Transcripts are disabled for this video")
+        except NoTranscriptFound:
+            raise Exception("No transcript found for this video (may not have captions)")
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a rate limit error
+            if '429' in error_str or 'Too Many Requests' in error_str.lower():
+                retry_count += 1
+                if retry_count < max_retries:
+                    delay = base_delay * retry_count
+                    print(f"Rate limited (429), retrying in {delay}s (attempt {retry_count}/{max_retries})...", file=sys.stderr)
+                    import time
+                    time.sleep(delay)
+                    continue
+                else:
+                    print("Max retries reached, trying yt-dlp fallback...", file=sys.stderr)
+                    fallback_transcript = fetch_transcript_ytdlp(video_id)
+                    if fallback_transcript:
+                        return fallback_transcript
+                    raise Exception("Rate limited: All methods exhausted. Try again later or use VPN.")
+            
+            # For other errors (like XML parsing), try yt-dlp fallback immediately
+            print(f"Primary method failed ({error_str}), trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript
+            raise Exception(f"Error fetching transcript: {e}")
+    
+    raise Exception("Failed to fetch transcript after multiple retries")
 
 
 def fetch_transcript_with_timestamps(video_id):
     """
     Fetch transcript with timestamp data for highlights generation.
 
-    Uses the same enhanced multi-method approach as fetch_transcript(),
-    with support for cookies, proxies, and yt-dlp fallback.
-
     Returns:
         tuple: (full_transcript_text, timestamp_data) where timestamp_data is a list of
                dicts with 'text', 'start' (seconds), 'duration' keys.
-               Returns (transcript, None) if timestamps unavailable (e.g., from yt-dlp).
+               Returns (transcript, None) if timestamps unavailable.
     """
-    transcript_data = _get_transcript_with_fallbacks(video_id)
+    max_retries = 3
+    retry_count = 0
+    base_delay = 30
 
-    # Check if we have proper timestamp data
-    # (yt-dlp fallback returns single-item list without timestamps)
-    if len(transcript_data) == 1 and transcript_data[0].get('start') == 0 and transcript_data[0].get('duration') == 0:
-        # This is from yt-dlp fallback - no timestamps
-        return transcript_data[0]['text'], None
+    while retry_count < max_retries:
+        try:
+            # Method 1: youtube-transcript-api
+            transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+            full_transcript = " ".join([item['text'] for item in transcript_data])
+            return full_transcript, transcript_data
 
-    full_transcript = " ".join([item['text'] for item in transcript_data])
-    return full_transcript, transcript_data
+        except AttributeError:
+            # Try newer API method
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+                # Try to find English transcript first
+                try:
+                    transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+                    transcript_data = transcript.fetch()
+                except:
+                    # Use first available transcript or auto-generated
+                    available = list(transcript_list)
+                    if not available:
+                        raise NoTranscriptFound(video_id)
+
+                    transcript = available[0]
+                    transcript_data = transcript.fetch()
+
+                full_transcript = " ".join([item['text'] for item in transcript_data])
+                return full_transcript, transcript_data
+
+            except Exception as e:
+                raise Exception(f"Alternative method failed: {e}")
+
+        except TranscriptsDisabled:
+            raise Exception("Transcripts are disabled for this video")
+        except NoTranscriptFound:
+            raise Exception("No transcript found for this video (may not have captions)")
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a rate limit error
+            if '429' in error_str or 'Too Many Requests' in error_str.lower():
+                retry_count += 1
+                if retry_count < max_retries:
+                    delay = base_delay * retry_count
+                    print(f"Rate limited (429), retrying in {delay}s (attempt {retry_count}/{max_retries})...", file=sys.stderr)
+                    import time
+                    time.sleep(delay)
+                    continue
+                else:
+                    print("Max retries reached, trying yt-dlp fallback...", file=sys.stderr)
+                    fallback_transcript = fetch_transcript_ytdlp(video_id)
+                    if fallback_transcript:
+                        return fallback_transcript, None  # No timestamps from yt-dlp
+                    raise Exception("Rate limited: All methods exhausted. Try again later or use VPN.")
+
+            # For other errors, try yt-dlp fallback immediately
+            print(f"Primary method failed ({error_str}), trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript, None  # No timestamps from yt-dlp
+            raise Exception(f"Error fetching transcript: {e}")
+
+    raise Exception("Failed to fetch transcript after multiple retries")
 
 
 def assess_content_quality(text, content_type="video"):
