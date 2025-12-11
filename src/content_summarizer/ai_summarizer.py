@@ -159,7 +159,7 @@ class AITranscriptSummarizer:
                 api_key=self.api_key,
                 base_url="https://api.groq.com/openai/v1"
             )
-            self.model = self.model or "llama-3.1-8b-instant"  # Default to fast model
+            self.model = self.model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")  # Default to high-quality model
             
         except ImportError:
             raise ImportError("OpenAI library not installed. Run: pip install openai")
