@@ -100,6 +100,10 @@ def extract_video_id(url_or_id):
         return parse_qs(parsed.query)["v"][0]
     elif "youtu.be/" in url_or_id:
         return url_or_id.split("youtu.be/")[1].split("?")[0]
+    elif "youtube.com/live/" in url_or_id:
+        # Handle YouTube Live URLs: youtube.com/live/VIDEO_ID
+        live_part = url_or_id.split("youtube.com/live/")[1]
+        return live_part.split("?")[0].split("/")[0]
     elif re.match(r'^[a-zA-Z0-9_-]{11}$', url_or_id):
         # Already a video ID
         return url_or_id
@@ -155,8 +159,8 @@ def detect_content_type(query):
         if "/status/" in query or "/i/broadcasts/" in query:
             return (ContentType.TWITTER_VIDEO, query)
 
-    # Check for YouTube patterns
-    if "youtube.com/watch" in query or "youtu.be/" in query:
+    # Check for YouTube patterns (including live streams)
+    if "youtube.com/watch" in query or "youtu.be/" in query or "youtube.com/live/" in query:
         try:
             video_id = extract_video_id(query)
             return (ContentType.VIDEO, video_id)
