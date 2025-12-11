@@ -2653,6 +2653,82 @@ def fetch_transcript(video_id):
     raise Exception("Failed to fetch transcript after multiple retries")
 
 
+def fetch_transcript_with_timestamps(video_id):
+    """
+    Fetch transcript with timestamp data for highlights generation.
+
+    Returns:
+        tuple: (full_transcript_text, timestamp_data) where timestamp_data is a list of
+               dicts with 'text', 'start' (seconds), 'duration' keys.
+               Returns (transcript, None) if timestamps unavailable.
+    """
+    max_retries = 3
+    retry_count = 0
+    base_delay = 30
+
+    while retry_count < max_retries:
+        try:
+            # Method 1: youtube-transcript-api
+            transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+            full_transcript = " ".join([item['text'] for item in transcript_data])
+            return full_transcript, transcript_data
+
+        except AttributeError:
+            # Try newer API method
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+                # Try to find English transcript first
+                try:
+                    transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+                    transcript_data = transcript.fetch()
+                except:
+                    # Use first available transcript or auto-generated
+                    available = list(transcript_list)
+                    if not available:
+                        raise NoTranscriptFound(video_id)
+
+                    transcript = available[0]
+                    transcript_data = transcript.fetch()
+
+                full_transcript = " ".join([item['text'] for item in transcript_data])
+                return full_transcript, transcript_data
+
+            except Exception as e:
+                raise Exception(f"Alternative method failed: {e}")
+
+        except TranscriptsDisabled:
+            raise Exception("Transcripts are disabled for this video")
+        except NoTranscriptFound:
+            raise Exception("No transcript found for this video (may not have captions)")
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a rate limit error
+            if '429' in error_str or 'Too Many Requests' in error_str.lower():
+                retry_count += 1
+                if retry_count < max_retries:
+                    delay = base_delay * retry_count
+                    print(f"Rate limited (429), retrying in {delay}s (attempt {retry_count}/{max_retries})...", file=sys.stderr)
+                    import time
+                    time.sleep(delay)
+                    continue
+                else:
+                    print("Max retries reached, trying yt-dlp fallback...", file=sys.stderr)
+                    fallback_transcript = fetch_transcript_ytdlp(video_id)
+                    if fallback_transcript:
+                        return fallback_transcript, None  # No timestamps from yt-dlp
+                    raise Exception("Rate limited: All methods exhausted. Try again later or use VPN.")
+
+            # For other errors, try yt-dlp fallback immediately
+            print(f"Primary method failed ({error_str}), trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript, None  # No timestamps from yt-dlp
+            raise Exception(f"Error fetching transcript: {e}")
+
+    raise Exception("Failed to fetch transcript after multiple retries")
+
+
 def assess_content_quality(text, content_type="video"):
     """
     Assess content quality and return warnings.
@@ -3011,64 +3087,72 @@ def _paragraphize(transcript_text, max_words_per_paragraph=120):
     return '\n\n'.join(paragraphs)
 
 
-def format_markdown_document(title, source_url, summary, takeaways, full_text, 
-                           content_label="Transcript", source_id=None, next_steps=None):
+def format_markdown_document(title, source_url, summary, takeaways, full_text,
+                           content_label="Transcript", source_id=None, next_steps=None,
+                           highlights=None):
     """
     Format a comprehensive markdown document for video or article.
-    
+
     Args:
         title: Content title
         source_url: Original URL
         summary: Executive summary
-        takeaways: List of key takeaways
+        takeaways: List of key takeaways (with emojis)
         full_text: Full transcript or article text
         content_label: "Transcript" or "Article"
         source_id: Video ID (optional, for videos only)
         next_steps: Recommended next steps (optional)
+        highlights: List of highlight strings with timestamps/quotes (optional)
     """
     from datetime import datetime
     doc = []
-    
+
     # Header with better formatting
     doc.append(f"# {title}\n")
     doc.append(f"**Source:** [{source_url}]({source_url})")
-    
+
     if source_id:
         doc.append(f"**Video ID:** `{source_id}`")
     else:
         doc.append(f"**Type:** {content_label}")
-    
+
     doc.append(f"**Generated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}\n")
     doc.append("\n" + "─" * 80 + "\n")
-    
-    # Key Insights (renamed from takeaways)
+
+    # Key Insights (with emojis preserved)
     if takeaways:
         doc.append("\n## 🎯 Key Insights\n")
         for i, takeaway in enumerate(takeaways, 1):
-            # Remove emoji from takeaway if present, display cleaner
-            clean = takeaway.lstrip('💡🎯⚠️ ')
-            doc.append(f"{i}. {clean}\n")
+            # Preserve emojis - they are now part of the insight
+            doc.append(f"{i}. {takeaway}\n")
         doc.append("\n" + "─" * 80 + "\n")
-    
+
+    # Highlights (timestamps for video/podcast, quotes for articles)
+    if highlights:
+        doc.append("\n## ⭐ Highlights\n")
+        for highlight in highlights:
+            doc.append(f"- {highlight}\n")
+        doc.append("\n" + "─" * 80 + "\n")
+
     # Executive Summary
     doc.append("\n## 📝 Executive Summary\n")
     doc.append(f"{summary}\n")
     doc.append("\n" + "─" * 80 + "\n")
-    
+
     # Recommended Actions (if AI available)
     if next_steps:
-        doc.append("\n## 💭 Recommended Actions\n")
+        doc.append("\n## 🚀 Next Steps\n")
         for step in next_steps:
             doc.append(f"- [ ] {step}\n")
         doc.append("\n" + "─" * 80 + "\n")
-    
+
     # Full Content
     word_count = len(full_text.split())
     read_time = word_count // 200  # Approx reading time
     doc.append(f"\n## 📄 Full {content_label}\n")
     doc.append(f"> {word_count:,} words • ~{read_time} min read\n\n")
     doc.append(f"{_paragraphize(full_text)}\n")
-    
+
     return '\n'.join(doc)
 
 
@@ -3184,6 +3268,7 @@ def handle_youtube_command(args):
     source_url = None
     source_id = None
     content_label = "Transcript"
+    timestamp_data = None  # Timestamp data for highlights (video only)
     
     if content_type == ContentType.ARTICLE:
         # Article pipeline
@@ -3369,11 +3454,11 @@ def handle_youtube_command(args):
             print(f"URL: {video_data['url']}")
             print(f"Video ID: {video_id}\n")
         
-        # Fetch transcript
+        # Fetch transcript with timestamps for highlights
         print("Fetching transcript...")
         try:
-            transcript_raw = fetch_transcript(video_id)
-            
+            transcript_raw, timestamp_data = fetch_transcript_with_timestamps(video_id)
+
             # Assess content quality BEFORE cleaning (to detect music)
             quality_warnings = assess_content_quality(transcript_raw, "video")
             
@@ -3440,22 +3525,9 @@ def handle_youtube_command(args):
             if cached_takeaways:
                 takeaways = cached_takeaways
             else:
+                # Takeaways now come with emojis from the AI prompt
                 takeaways = ai_summarizer.generate_key_takeaways(content_text, content_title or "Content", takeaways_count)
                 if takeaways:
-                    # Format with emojis for visual appeal
-                    formatted_takeaways = []
-                    for i, takeaway in enumerate(takeaways):
-                        if i == 0:
-                            formatted_takeaways.append(f"🎯 {takeaway}")
-                        elif i == 1:
-                            formatted_takeaways.append(f"💡 {takeaway}")
-                        elif i == 2:
-                            formatted_takeaways.append(f"🚀 {takeaway}")
-                        elif i == 3:
-                            formatted_takeaways.append(f"🔧 {takeaway}")
-                        else:
-                            formatted_takeaways.append(f"✨ {takeaway}")
-                    takeaways = formatted_takeaways
                     save_ai_response(content_text, 'takeaways', cache_params, takeaways)
                 else:
                     print("⚠ AI takeaway generation failed, using extraction method")
@@ -3495,11 +3567,11 @@ def handle_youtube_command(args):
     next_steps = []
     if ai_summarizer and takeaways:
         print("Generating recommended next steps...")
-        
+
         # Check cache first
         cache_params = {'title': content_title, 'takeaways': takeaways[:3]}  # Use first 3 for cache key
         cached_next_steps = get_cached_ai_response(content_text, 'next_steps', cache_params)
-        
+
         if cached_next_steps:
             next_steps = cached_next_steps
             print(f"✓ Generated {len(next_steps)} next steps")
@@ -3508,7 +3580,40 @@ def handle_youtube_command(args):
             if next_steps:
                 save_ai_response(content_text, 'next_steps', cache_params, next_steps)
                 print(f"✓ Generated {len(next_steps)} next steps")
-    
+
+    # Generate highlights (timestamps for video/podcast, quotes for articles)
+    highlights = []
+    if ai_summarizer:
+        print("Generating highlights...")
+
+        # Determine content type for highlights
+        if content_type == ContentType.ARTICLE:
+            hl_content_type = "article"
+        elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH]:
+            hl_content_type = "podcast"
+        else:
+            hl_content_type = "video"
+
+        # Check cache first
+        cache_params = {'title': content_title, 'type': hl_content_type}
+        cached_highlights = get_cached_ai_response(content_text, 'highlights', cache_params)
+
+        if cached_highlights:
+            highlights = cached_highlights
+            print(f"✓ Generated {len(highlights)} highlights")
+        else:
+            # Use timestamp_data if available (set in video pipeline)
+            highlights = ai_summarizer.generate_highlights(
+                content_text,
+                content_title,
+                content_type=hl_content_type,
+                timestamp_data=timestamp_data,
+                count=7
+            )
+            if highlights:
+                save_ai_response(content_text, 'highlights', cache_params, highlights)
+                print(f"✓ Generated {len(highlights)} highlights")
+
     # Save files based on format
     if output_format == 'md':
         # Save as single markdown file
@@ -3520,7 +3625,8 @@ def handle_youtube_command(args):
             full_text=content_text,
             content_label=content_label,
             source_id=source_id,
-            next_steps=next_steps
+            next_steps=next_steps,
+            highlights=highlights
         )
         
         # Determine correct subfolder based on content type
