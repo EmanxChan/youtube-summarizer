@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from content_summarizer.style import apply_dark_mode
+from content_summarizer.history_manager import get_history_manager, record_history
 
 # Load environment variables from .env file (project root)
 load_dotenv(ROOT / ".env")
@@ -71,6 +72,73 @@ apply_dark_mode()
 
 # Add info box
 st.info("✨ **Supports YouTube videos, podcasts, articles, files, and text** • AI-powered summaries with key takeaways")
+
+# === History Sidebar ===
+with st.sidebar:
+    st.markdown("## 📜 History")
+
+    # Search box
+    history_search = st.text_input(
+        "Search history",
+        placeholder="Search by title or URL...",
+        label_visibility="collapsed",
+        key="history_search"
+    )
+
+    # Filter buttons
+    history_filter = st.radio(
+        "Filter",
+        ["All", "Video", "Podcast", "Article"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="history_filter"
+    )
+
+    # Get history entries
+    history_manager = get_history_manager()
+    filter_type = None if history_filter == "All" else history_filter.lower()
+    history_entries = history_manager.get_entries(
+        limit=20,
+        content_type=filter_type,
+        search_query=history_search if history_search else None
+    )
+
+    if history_entries:
+        for entry in history_entries:
+            formatted = history_manager.format_entry_for_display(entry)
+
+            # Create clickable history item
+            with st.container():
+                col1, col2 = st.columns([1, 6])
+                with col1:
+                    st.markdown(f"### {formatted['icon']}")
+                with col2:
+                    title = formatted.get('title', 'Untitled')[:40]
+                    if len(formatted.get('title', '')) > 40:
+                        title += "..."
+
+                    st.markdown(f"**{title}**")
+                    st.caption(f"{formatted['domain']} • {formatted['time_ago']}")
+
+                # Re-process button
+                if st.button("🔄 Re-process", key=f"reprocess_{entry['id']}", use_container_width=True):
+                    st.session_state.reprocess_url = entry.get('url', '')
+                    st.rerun()
+
+                st.markdown("---")
+    else:
+        st.caption("No history yet. Summaries will appear here.")
+
+    # Stats at bottom
+    stats = history_manager.get_stats()
+    if stats['total_entries'] > 0:
+        st.caption(f"📊 {stats['total_entries']} total summaries")
+
+# Handle re-process from history
+if 'reprocess_url' in st.session_state and st.session_state.reprocess_url:
+    reprocess_url = st.session_state.reprocess_url
+    st.session_state.reprocess_url = None
+    # Will be handled by the URL input below
 
 # === Tabbed Input Interface with Dedicated Content Types ===
 tab_yt, tab_podcast, tab_article, tab_upload, tab_text = st.tabs([
@@ -436,13 +504,39 @@ def process_url(url, words):
                 try:
                     with open(path, "r", encoding="utf-8") as f:
                         content = f.read()
-                    
+
                     # Save to session state so it persists across reruns
                     st.session_state.last_result = {
                         'content': content,
-                        'filename': os.path.basename(path)
+                        'filename': os.path.basename(path),
+                        'url': url  # Store URL for history
                     }
-                    
+
+                    # Extract title from markdown content
+                    title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+                    title = title_match.group(1) if title_match else os.path.basename(path)
+
+                    # Determine content type from URL
+                    if 'youtube.com' in url or 'youtu.be' in url:
+                        content_type = 'video'
+                    elif any(x in url for x in ['spotify.com', 'apple.com/podcast', 'podcasts.apple.com', '.rss', '/rss', '/feed']):
+                        content_type = 'podcast'
+                    else:
+                        content_type = 'article'
+
+                    # Extract summary preview
+                    summary_match = re.search(r'## 📝 Executive Summary\s+(.+?)(?=\n##|\n---|\Z)', content, re.DOTALL)
+                    summary_preview = summary_match.group(1).strip()[:300] if summary_match else ""
+
+                    # Record in history
+                    record_history(
+                        url=url,
+                        title=title,
+                        content_type=content_type,
+                        source_label="URL",
+                        summary=summary_preview
+                    )
+
                 except Exception as e:
                     st.warning(f"Could not read saved file: {e}")
                     with st.expander("🔍 Processing Output"):
@@ -785,13 +879,32 @@ except Exception as e:
                 if os.path.exists(saved_path):
                     with open(saved_path, 'r', encoding='utf-8') as f:
                         md_content = f.read()
-                    
+
                     # Save to session state for persistent display
                     st.session_state.file_result = {
                         'content': md_content,
                         'filename': uploaded_file.name
                     }
-            
+
+                    # Determine content type
+                    if is_pdf:
+                        content_type = 'article'
+                    else:
+                        content_type = 'video'  # Audio/video files
+
+                    # Extract summary preview
+                    summary_match = re.search(r'## 📝 Executive Summary\s+(.+?)(?=\n##|\n---|\Z)', md_content, re.DOTALL)
+                    summary_preview = summary_match.group(1).strip()[:300] if summary_match else ""
+
+                    # Record in history
+                    record_history(
+                        url=f"file://{uploaded_file.name}",
+                        title=uploaded_file.name,
+                        content_type=content_type,
+                        source_label="Uploaded File",
+                        summary=summary_preview
+                    )
+
             # Results will be displayed below
         else:
             progress_bar.empty()
@@ -943,13 +1056,30 @@ except Exception as e:
                 if os.path.exists(saved_path):
                     with open(saved_path, 'r', encoding='utf-8') as f:
                         md_content = f.read()
-                    
+
                     # Save to session state for persistent display
                     st.session_state.text_result = {
                         'content': md_content,
                         'filename': 'pasted_content.md'
                     }
-            
+
+                    # Extract title from markdown content
+                    title_match = re.search(r'^#\s+(.+)$', md_content, re.MULTILINE)
+                    title = title_match.group(1) if title_match else "Pasted Content"
+
+                    # Extract summary preview
+                    summary_match = re.search(r'## 📝 Executive Summary\s+(.+?)(?=\n##|\n---|\Z)', md_content, re.DOTALL)
+                    summary_preview = summary_match.group(1).strip()[:300] if summary_match else ""
+
+                    # Record in history
+                    record_history(
+                        url="text://pasted-content",
+                        title=title,
+                        content_type="article",
+                        source_label="Pasted Text",
+                        summary=summary_preview
+                    )
+
             # Results will be displayed below
         else:
             st.error("❌ Failed to generate summary")
