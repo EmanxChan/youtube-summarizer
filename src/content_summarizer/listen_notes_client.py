@@ -199,11 +199,176 @@ class ListenNotesClient:
         """Look up episode by Apple Podcasts IDs"""
         # Listen Notes doesn't have direct Apple ID lookup, use search
         return None
-    
+
     def _lookup_by_spotify_id(self, episode_id: str) -> Optional[Dict]:
         """Look up episode by Spotify ID"""
         # Listen Notes doesn't have direct Spotify ID lookup, use search
         return None
+
+    def search_episode_by_title(self, podcast_name: str, episode_title: str) -> Optional[Dict]:
+        """
+        Search for a specific episode by podcast name and episode title.
+        This is the primary method for finding specific episodes from URLs.
+
+        Phase 2: Listen Notes episode search implementation.
+
+        Args:
+            podcast_name: Name of the podcast
+            episode_title: Title of the episode to find
+
+        Returns:
+            Episode dict with audio_url and metadata, or None if not found
+        """
+        if not podcast_name or not episode_title:
+            print(f"  ⚠️ Listen Notes: Missing podcast name or episode title")
+            return None
+
+        try:
+            # Build search query combining podcast name and episode title
+            # This helps narrow down to the specific episode
+            search_query = f"{podcast_name} {episode_title}"
+
+            # Truncate if too long (API has limits)
+            if len(search_query) > 150:
+                # Keep podcast name and truncate episode title
+                max_episode_len = 150 - len(podcast_name) - 1
+                episode_title_truncated = episode_title[:max_episode_len]
+                search_query = f"{podcast_name} {episode_title_truncated}"
+
+            print(f"  🔍 Listen Notes: Searching for specific episode...")
+            print(f"     Podcast: {podcast_name[:50]}{'...' if len(podcast_name) > 50 else ''}")
+            print(f"     Episode: {episode_title[:50]}{'...' if len(episode_title) > 50 else ''}")
+
+            response = self._api_request(
+                'GET',
+                '/search',
+                params={
+                    'q': search_query,
+                    'type': 'episode',
+                    'page_size': 10,
+                    'sort_by_date': 0  # Sort by relevance for better matching
+                }
+            )
+
+            results = response.get('results', [])
+
+            if not results:
+                print(f"  ℹ️ Listen Notes: No episodes found for search query")
+                return None
+
+            # Find best matching episode
+            from difflib import SequenceMatcher
+
+            podcast_name_lower = podcast_name.lower()
+            episode_title_lower = episode_title.lower()
+
+            best_match = None
+            best_score = 0
+
+            for result in results:
+                result_podcast = result.get('podcast', {}).get('title_original', '').lower()
+                result_title = result.get('title_original', result.get('title', '')).lower()
+
+                # Check if podcast name matches
+                podcast_similarity = SequenceMatcher(None, podcast_name_lower, result_podcast).ratio()
+
+                # Require at least 50% podcast name match
+                if podcast_similarity < 0.5:
+                    # Also check if podcast name is contained in result
+                    if podcast_name_lower not in result_podcast and result_podcast not in podcast_name_lower:
+                        continue
+
+                # Calculate episode title similarity
+                title_similarity = SequenceMatcher(None, episode_title_lower, result_title).ratio()
+
+                # Combined score (weight episode title more since that's what we're matching)
+                combined_score = (podcast_similarity * 0.3) + (title_similarity * 0.7)
+
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_match = result
+
+            if best_match and best_score >= 0.4:
+                print(f"  ✓ Found matching episode (confidence: {best_score:.0%})")
+                print(f"     Title: {best_match.get('title_original', '')[:60]}...")
+
+                return {
+                    'audio_url': best_match.get('audio'),
+                    'title': best_match.get('title_original', best_match.get('title')),
+                    'description': best_match.get('description_original', best_match.get('description', '')),
+                    'duration': best_match.get('audio_length_sec', 0),
+                    'podcast_title': best_match.get('podcast', {}).get('title_original', ''),
+                    'podcast_id': best_match.get('podcast', {}).get('id', ''),
+                    'episode_id': best_match.get('id', ''),
+                    'pub_date': best_match.get('pub_date_ms', 0),
+                    'thumbnail': best_match.get('thumbnail') or best_match.get('image'),
+                    'source': 'listen_notes_episode_search',
+                    'match_confidence': best_score
+                }
+            else:
+                print(f"  ℹ️ Listen Notes: No confident match found (best score: {best_score:.0%})")
+                return None
+
+        except Exception as e:
+            print(f"  ⚠️ Listen Notes episode search error: {e}")
+            return None
+
+    def find_episode_in_podcast(self, podcast_id: str, episode_title: str, limit: int = 50) -> Optional[Dict]:
+        """
+        Find a specific episode within a known podcast by title matching.
+        Use when you already know the podcast ID.
+
+        Args:
+            podcast_id: Listen Notes podcast ID
+            episode_title: Episode title to search for
+            limit: Max episodes to search through
+
+        Returns:
+            Episode dict or None
+        """
+        try:
+            from difflib import SequenceMatcher
+
+            episode_title_lower = episode_title.lower()
+
+            # Fetch episodes from podcast
+            response = self._api_request(
+                'GET',
+                f'/podcasts/{podcast_id}',
+                params={'sort': 'recent_first', 'next_episode_pub_date': 0}
+            )
+
+            episodes = response.get('episodes', [])[:limit]
+
+            if not episodes:
+                return None
+
+            best_match = None
+            best_score = 0
+
+            for ep in episodes:
+                ep_title = ep.get('title', '').lower()
+
+                # Exact substring match
+                if episode_title_lower in ep_title or ep_title in episode_title_lower:
+                    print(f"  🎯 Exact match found: {ep.get('title')}")
+                    return self._format_episode_data(ep, response)
+
+                # Fuzzy match
+                similarity = SequenceMatcher(None, episode_title_lower, ep_title).ratio()
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match = ep
+
+            if best_match and best_score >= 0.6:
+                print(f"  ✓ Matched episode (confidence: {best_score:.0%}): {best_match.get('title')}")
+                return self._format_episode_data(best_match, response)
+
+            return None
+
+        except Exception as e:
+            print(f"  ⚠️ Episode lookup error: {e}")
+            return None
     
     def _search_by_url(self, url: str) -> Optional[Dict]:
         """
