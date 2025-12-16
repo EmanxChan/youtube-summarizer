@@ -572,10 +572,10 @@ def extract_episode_title_from_url(podcast_url):
     """
     Extract episode title from podcast URL slug.
     Works for Apple Podcasts URLs.
-    
+
     Args:
         podcast_url: Podcast URL
-        
+
     Returns:
         Extracted title string or None
     """
@@ -590,12 +590,235 @@ def extract_episode_title_from_url(podcast_url):
                 # Replace hyphens with spaces and capitalize
                 title = slug.replace('-', ' ').title()
                 return title
-        
+
         # Could add Spotify and other platforms here
-        
+
         return None
     except Exception as e:
         return None
+
+
+class EpisodeNotFoundError(Exception):
+    """Raised when a specific episode cannot be found."""
+    pass
+
+
+class PodcastScrapingError(Exception):
+    """Raised when webpage scraping fails."""
+    pass
+
+
+def scrape_episode_metadata_from_webpage(podcast_url):
+    """
+    Scrape episode title and podcast name from podcast platform webpages.
+    Supports Apple Podcasts, Spotify, and Neuecast.
+
+    Phase 1: Webpage scraping for episode titles.
+
+    Args:
+        podcast_url: URL to Apple Podcasts, Spotify, or Neuecast episode page
+
+    Returns:
+        dict: {
+            'podcast_name': str,
+            'episode_title': str,
+            'platform': str,  # 'apple', 'spotify', 'neuecast'
+            'episode_id': str or None,
+            'show_id': str or None
+        }
+
+    Raises:
+        PodcastScrapingError: If scraping fails
+    """
+    if not ARTICLE_SUPPORT:
+        raise PodcastScrapingError("BeautifulSoup required for webpage scraping")
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                     'AppleWebKit/537.36 (KHTML, like Gecko) '
+                     'Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+
+    try:
+        response = requests.get(podcast_url, headers=headers, timeout=15)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # ===== APPLE PODCASTS =====
+        if 'podcasts.apple.com' in podcast_url:
+            result = {'platform': 'apple', 'episode_id': None, 'show_id': None}
+
+            # Extract IDs from URL
+            id_match = re.search(r'/id(\d+)', podcast_url)
+            if id_match:
+                result['show_id'] = id_match.group(1)
+
+            episode_match = re.search(r'\?i=(\d+)', podcast_url)
+            if episode_match:
+                result['episode_id'] = episode_match.group(1)
+
+            # Try to get episode title from page
+            # Method 1: Look for specific episode title element
+            episode_elem = soup.find('span', class_='episode-details__title') or \
+                          soup.find('h1', class_='headings__title') or \
+                          soup.find('meta', property='og:title')
+
+            if episode_elem:
+                if episode_elem.name == 'meta':
+                    result['episode_title'] = episode_elem.get('content', '').strip()
+                else:
+                    result['episode_title'] = episode_elem.get_text(strip=True)
+
+            # Method 2: Use og:title meta tag (usually "Episode Name - Podcast Name")
+            if not result.get('episode_title'):
+                og_title = soup.find('meta', property='og:title')
+                if og_title:
+                    title_text = og_title.get('content', '')
+                    # Apple format: "Episode Title - Podcast Name"
+                    if ' - ' in title_text:
+                        parts = title_text.rsplit(' - ', 1)
+                        result['episode_title'] = parts[0].strip()
+                        result['podcast_name'] = parts[1].strip()
+
+            # Get podcast name if not already found
+            if not result.get('podcast_name'):
+                # Try various selectors
+                podcast_elem = soup.find('a', class_='link-action') or \
+                              soup.find('span', class_='podcast-header__identity') or \
+                              soup.find('h2', class_='product-header__identity')
+                if podcast_elem:
+                    result['podcast_name'] = podcast_elem.get_text(strip=True)
+
+            # Fallback: try title tag
+            if not result.get('episode_title') and soup.title:
+                title_text = soup.title.string or ''
+                # Remove common suffixes
+                for suffix in [' on Apple Podcasts', ' - Apple Podcasts']:
+                    if title_text.endswith(suffix):
+                        title_text = title_text[:-len(suffix)]
+                if ' - ' in title_text:
+                    parts = title_text.rsplit(' - ', 1)
+                    result['episode_title'] = parts[0].strip()
+                    if not result.get('podcast_name'):
+                        result['podcast_name'] = parts[1].strip()
+                else:
+                    result['episode_title'] = title_text.strip()
+
+            if result.get('episode_title') or result.get('podcast_name'):
+                print(f"  🍎 Scraped Apple Podcasts: {result.get('podcast_name', 'Unknown')} - {result.get('episode_title', 'Unknown')}")
+                return result
+
+            raise PodcastScrapingError("Could not extract episode info from Apple Podcasts page")
+
+        # ===== SPOTIFY =====
+        elif 'spotify.com' in podcast_url:
+            result = {'platform': 'spotify', 'episode_id': None, 'show_id': None}
+
+            # Extract IDs from URL
+            episode_match = re.search(r'/episode/([a-zA-Z0-9]+)', podcast_url)
+            if episode_match:
+                result['episode_id'] = episode_match.group(1)
+
+            show_match = re.search(r'/show/([a-zA-Z0-9]+)', podcast_url)
+            if show_match:
+                result['show_id'] = show_match.group(1)
+
+            # Try og:title first (most reliable)
+            og_title = soup.find('meta', property='og:title')
+            if og_title:
+                result['episode_title'] = og_title.get('content', '').strip()
+
+            # Get podcast name from og:description or page elements
+            og_desc = soup.find('meta', property='og:description')
+            if og_desc:
+                desc_text = og_desc.get('content', '')
+                # Spotify descriptions often have "Listen to this episode from {Podcast Name}"
+                podcast_match = re.search(r'from ([^.]+?)(?:\s+on Spotify|\.|$)', desc_text)
+                if podcast_match:
+                    result['podcast_name'] = podcast_match.group(1).strip()
+
+            # Try to find podcast name in page structure
+            if not result.get('podcast_name'):
+                # Look for show link
+                show_link = soup.find('a', href=re.compile(r'/show/'))
+                if show_link:
+                    result['podcast_name'] = show_link.get_text(strip=True)
+
+            # Fallback: try title tag
+            if not result.get('episode_title') and soup.title:
+                title_text = soup.title.string or ''
+                for suffix in [' | Podcast on Spotify', ' - song and lyrics by', ' - Spotify']:
+                    if suffix in title_text:
+                        title_text = title_text.split(suffix)[0]
+                result['episode_title'] = title_text.strip()
+
+            if result.get('episode_title') or result.get('podcast_name'):
+                print(f"  🎵 Scraped Spotify: {result.get('podcast_name', 'Unknown')} - {result.get('episode_title', 'Unknown')}")
+                return result
+
+            raise PodcastScrapingError("Could not extract episode info from Spotify page")
+
+        # ===== NEUECAST =====
+        elif 'neuecast.app' in podcast_url:
+            result = {'platform': 'neuecast', 'episode_id': None, 'show_id': None}
+
+            # Extract IDs from URL
+            episode_match = re.search(r'/episode/([a-zA-Z0-9_-]+)', podcast_url)
+            if episode_match:
+                result['episode_id'] = episode_match.group(1)
+
+            podcast_match = re.search(r'/podcast/([a-zA-Z0-9_-]+)', podcast_url)
+            if podcast_match:
+                result['show_id'] = podcast_match.group(1)
+
+            # Try og:title
+            og_title = soup.find('meta', property='og:title')
+            if og_title:
+                title_text = og_title.get('content', '').strip()
+                # Neuecast format varies, try to parse
+                if ' | ' in title_text:
+                    parts = title_text.split(' | ')
+                    result['episode_title'] = parts[0].strip()
+                    if len(parts) > 1:
+                        result['podcast_name'] = parts[1].strip()
+                else:
+                    result['episode_title'] = title_text
+
+            # Try page title
+            if not result.get('episode_title') and soup.title:
+                title_text = soup.title.string or ''
+                if ' | ' in title_text:
+                    parts = title_text.split(' | ')
+                    result['episode_title'] = parts[0].strip()
+                    if len(parts) > 1:
+                        result['podcast_name'] = parts[1].strip()
+                else:
+                    result['episode_title'] = title_text.strip()
+
+            # Try h1/h2 for episode title
+            if not result.get('episode_title'):
+                h1 = soup.find('h1')
+                if h1:
+                    result['episode_title'] = h1.get_text(strip=True)
+
+            if result.get('episode_title') or result.get('podcast_name'):
+                print(f"  📻 Scraped Neuecast: {result.get('podcast_name', 'Unknown')} - {result.get('episode_title', 'Unknown')}")
+                return result
+
+            raise PodcastScrapingError("Could not extract episode info from Neuecast page")
+
+        else:
+            raise PodcastScrapingError(f"Unsupported platform for URL: {podcast_url}")
+
+    except requests.exceptions.RequestException as e:
+        raise PodcastScrapingError(f"Failed to fetch webpage: {e}")
+    except Exception as e:
+        if isinstance(e, PodcastScrapingError):
+            raise
+        raise PodcastScrapingError(f"Scraping failed: {e}")
 
 
 def find_episode_by_title(feed_entries, target_title, threshold=0.6):
@@ -1921,71 +2144,98 @@ def handle_direct_audio(audio_url):
 
 def handle_podcast_content(podcast_url):
     """
-    Handle podcast URL with Listen Notes API for metadata + Whisper for transcription.
-    
+    Handle podcast URL with episode-specific search.
+
+    Phase 3: Updated processing flow that searches for the SPECIFIC episode
+    from the URL, not just the latest episode.
+
     Args:
-        podcast_url: Podcast URL (Spotify, Apple, or RSS)
-        
+        podcast_url: Podcast URL (Spotify, Apple, Neuecast, or RSS)
+
     Returns:
         tuple: (title, transcript_text, source_label)
     """
     import time
-    
+
     print(f"🎙️  Processing podcast URL...")
-    
+
     # Initialize metrics tracker
     metrics = TranscriptMetrics() if LISTEN_NOTES_AVAILABLE else None
-    
-    # PRIORITY 1: Try Listen Notes API for metadata + audio URL
+
+    # Track what we know about the episode
     audio_url = None
     episode_title = None
     podcast_title = None
-    
-    if LISTEN_NOTES_AVAILABLE:
-        print("  🏷️  [Primary] Checking Listen Notes API...")
+    scraped_metadata = None
+    specific_episode_found = False
+
+    # =================================================================
+    # PHASE 1: Scrape webpage to get podcast name and episode title
+    # =================================================================
+    if not is_rss_feed(podcast_url):
+        print("  🔍 [Phase 1] Scraping webpage for episode metadata...")
+        try:
+            scraped_metadata = scrape_episode_metadata_from_webpage(podcast_url)
+            if scraped_metadata:
+                episode_title = scraped_metadata.get('episode_title')
+                podcast_title = scraped_metadata.get('podcast_name')
+                print(f"  ✓ Extracted: '{episode_title}' from '{podcast_title}'")
+        except PodcastScrapingError as e:
+            print(f"  ⚠️ Webpage scraping failed: {e}")
+        except Exception as e:
+            print(f"  ⚠️ Unexpected scraping error: {e}")
+
+    # =================================================================
+    # PHASE 2: Use Listen Notes to search for the SPECIFIC episode
+    # =================================================================
+    if LISTEN_NOTES_AVAILABLE and episode_title and podcast_title:
+        print("  🔍 [Phase 2] Searching Listen Notes for specific episode...")
 
         start_time = time.time()
         try:
             listen_notes_client = ListenNotesClient()
-            result = listen_notes_client.get_episode_by_url(podcast_url)
+            result = listen_notes_client.search_episode_by_title(podcast_title, episode_title)
             duration = time.time() - start_time
 
             if result and result.get('audio_url'):
                 audio_url = result['audio_url']
-                episode_title = result.get('title', 'Unknown Episode')
-                podcast_title = result.get('podcast_title', '')
+                episode_title = result.get('title', episode_title)
+                podcast_title = result.get('podcast_title', podcast_title)
+                specific_episode_found = True
 
-                print(f"  ✓ Listen Notes API success! ({duration:.1f}s)")
+                match_confidence = result.get('match_confidence', 0)
+                print(f"  ✓ Found specific episode via Listen Notes! (confidence: {match_confidence:.0%})")
 
-                # Record metrics
                 if metrics:
-                    metrics.record('listen_notes_api', podcast_url, True, duration)
+                    metrics.record('listen_notes_episode_search', podcast_url, True, duration)
 
                 # Show quota status
                 ln_metrics = listen_notes_client.get_metrics()
                 if ln_metrics.get('quota_remaining'):
                     print(f"  📊 Listen Notes quota: {ln_metrics['requests_made']} used | {ln_metrics['quota_remaining']} remaining")
             else:
-                print(f"  ℹ️  Listen Notes: No audio URL found")
+                print(f"  ℹ️ Listen Notes: Could not find specific episode")
                 if metrics:
-                    metrics.record('listen_notes_api', podcast_url, False, duration)
+                    metrics.record('listen_notes_episode_search', podcast_url, False, duration)
 
         except Exception as e:
             duration = time.time() - start_time
-            print(f"  ⚠️  Listen Notes API error: {e}")
+            print(f"  ⚠️ Listen Notes search error: {e}")
             if metrics:
-                metrics.record('listen_notes_api', podcast_url, False, duration)
-    
-    print(f"  🔄 Trying fallback methods...\n")
-    
-    # Step 1: Get RSS feed URL
+                metrics.record('listen_notes_episode_search', podcast_url, False, duration)
+
+    # =================================================================
+    # PHASE 3: Get RSS feed URL for fallback methods
+    # =================================================================
+    print("  🔄 [Phase 3] Setting up RSS fallback methods...")
+
     rss_url = None
     episode_url = None
-    
+
     if is_rss_feed(podcast_url):
         print("  ✓ Direct RSS feed detected")
         rss_url = podcast_url
-        
+
     elif "podcasts.apple.com" in podcast_url:
         print("  🍎 Apple Podcasts detected")
         print("  📡 Extracting RSS feed from Apple Podcasts...")
@@ -1994,8 +2244,10 @@ def handle_podcast_content(podcast_url):
             print(f"  ✓ RSS feed found!")
             episode_url = podcast_url
         except Exception as e:
-            raise ValueError(f"Could not extract RSS feed from Apple Podcasts: {e}")
-    
+            if not specific_episode_found:
+                raise ValueError(f"Could not extract RSS feed from Apple Podcasts: {e}")
+            print(f"  ⚠️ RSS extraction failed, but we have episode from Listen Notes")
+
     elif "spotify.com" in podcast_url:
         print("  🎵 Spotify podcast detected")
         print("  📡 Attempting to find RSS feed (free method)...")
@@ -2004,107 +2256,148 @@ def handle_podcast_content(podcast_url):
             print(f"  ✓ RSS feed found!")
             episode_url = podcast_url
         except Exception as e:
-            print(f"  ⚠️  {e}")
-            raise ValueError(
-                "This Spotify podcast cannot be accessed via free methods. "
-                "You can try entering the direct RSS feed URL if you have it."
-            )
+            if not specific_episode_found:
+                print(f"  ⚠️ {e}")
+                raise ValueError(
+                    "This Spotify podcast cannot be accessed via free methods. "
+                    "You can try entering the direct RSS feed URL if you have it."
+                )
+            print(f"  ⚠️ RSS extraction failed, but we have episode from Listen Notes")
+
+    elif "neuecast.app" in podcast_url:
+        print("  📻 Neuecast detected")
+        episode_url = podcast_url
+        # Neuecast doesn't have direct RSS, rely on Listen Notes or other methods
+        if not specific_episode_found:
+            print("  ⚠️ Neuecast requires Listen Notes API for episode lookup")
+
     else:
-        raise ValueError(f"Unsupported podcast URL format: {podcast_url}")
-    
-    # Step 2: Try to get transcript from RSS feed
-    print("  🔍 Checking RSS feed for existing transcript...")
-    start_time = time.time()
-    title, transcript = fetch_transcript_from_rss(rss_url, episode_url)
-    
-    if transcript:
-        duration = time.time() - start_time
-        print(f"  ✓ Transcript found in RSS feed! (instant)")
-        if metrics:
-            metrics.record('rss_transcript', podcast_url, True, duration)
-        return title, transcript, "Podcast Transcript (RSS)"
-    
-    print(f"  ℹ️  No transcript in RSS feed")
-    
-    # Get show notes first (needed for final fallback)
-    show_title, show_notes, has_chapters = extract_show_notes_from_rss(rss_url, episode_url)
-    
-    if not title:
-        title = show_title
-    
-    # Extract podcast name from RSS for better YouTube matching
-    podcast_name = None
-    try:
-        import feedparser
-        feed = feedparser.parse(rss_url)
-        podcast_name = feed.feed.get('title', '')
-        if podcast_name:
-            print(f"  📻 Podcast: {podcast_name}")
-    except:
-        pass
-    
-    # Try webpage and YouTube fallbacks in parallel
-    print("  ⚡ Running parallel fallback attempts...")
-    
+        if not specific_episode_found:
+            raise ValueError(f"Unsupported podcast URL format: {podcast_url}")
+
+    # =================================================================
+    # PHASE 4: Try RSS transcript with improved episode matching
+    # =================================================================
+    if rss_url:
+        print("  🔍 [Phase 4] Checking RSS feed for transcript...")
+        start_time = time.time()
+
+        # Pass scraped episode title for better RSS matching
+        rss_episode_title = episode_title if episode_title else None
+        title, transcript = fetch_transcript_from_rss_enhanced(
+            rss_url,
+            episode_url=episode_url,
+            target_episode_title=rss_episode_title
+        )
+
+        if transcript:
+            duration = time.time() - start_time
+            if specific_episode_found or rss_episode_title:
+                print(f"  ✓ Transcript found for SPECIFIC episode in RSS!")
+            else:
+                print(f"  ⚠️ WARNING: Using latest episode (specific episode not found)")
+            if metrics:
+                metrics.record('rss_transcript', podcast_url, True, duration)
+            return title, transcript, "Podcast Transcript (RSS)"
+
+        print(f"  ℹ️ No transcript in RSS feed")
+
+        # Get show notes and podcast name from RSS
+        show_title, show_notes, has_chapters = extract_show_notes_from_rss(rss_url, episode_url)
+
+        if not episode_title:
+            episode_title = show_title
+
+        # Extract podcast name from RSS if not already known
+        if not podcast_title:
+            try:
+                import feedparser
+                feed = feedparser.parse(rss_url)
+                podcast_title = feed.feed.get('title', '')
+                if podcast_title:
+                    print(f"  📻 Podcast: {podcast_title}")
+            except:
+                pass
+
+    # =================================================================
+    # PHASE 5: Try webpage and YouTube fallbacks in parallel
+    # =================================================================
+    print("  ⚡ [Phase 5] Running parallel fallback attempts...")
+
     start_time = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         future_webpage = executor.submit(try_webpage_fallback, episode_url)
-        future_youtube = executor.submit(try_youtube_fallback, title, podcast_name)
-        
+        future_youtube = executor.submit(try_youtube_fallback, episode_title, podcast_title)
+
         for future in concurrent.futures.as_completed([future_webpage, future_youtube]):
             result = future.result()
             if result:
                 duration = time.time() - start_time
                 source, result_title, result_transcript = result
-                
+
                 if source == 'webpage':
                     print(f"  ✓ Transcript found on webpage!")
                     if metrics:
                         metrics.record('webpage', podcast_url, True, duration)
-                    return result_title or title, result_transcript, "Podcast Transcript (Webpage)"
+                    return result_title or episode_title, result_transcript, "Podcast Transcript (Webpage)"
                 elif source == 'youtube':
                     print(f"  ✓ YouTube version found!")
                     if metrics:
                         metrics.record('youtube_mirror', podcast_url, True, duration)
                     return result_title, result_transcript, "Podcast Transcript (YouTube Mirror)"
-    
-    print("  ℹ️  No transcript found via fast methods")
-    
-    # Phase 4: Download audio + transcribe with Whisper
-    print("  🎤 [Fallback 4/4] Audio transcription with Whisper...")
-    
-    # Prefer audio_url from Listen Notes if available
-    if not audio_url:
-        # Get audio URL from RSS
+
+    print("  ℹ️ No transcript found via fast methods")
+
+    # =================================================================
+    # PHASE 6: Download audio + transcribe with Whisper
+    # =================================================================
+    print("  🎤 [Phase 6] Audio transcription with Whisper...")
+
+    # If we don't have audio URL from Listen Notes, get from RSS
+    if not audio_url and rss_url:
+        print("  📥 Getting audio URL from RSS feed...")
         import feedparser
         feed = feedparser.parse(rss_url)
-        
+
         target_episode = None
-        
-        if episode_url:
+
+        # Try to find specific episode in RSS
+        if episode_title:
+            target_episode = find_episode_by_title(feed.entries, episode_title, threshold=0.5)
+            if target_episode:
+                print(f"  ✓ Found specific episode in RSS: {target_episode.get('title', '')[:50]}...")
+
+        # Also try URL matching
+        if not target_episode and episode_url:
             for entry in feed.entries:
                 if episode_url in entry.get('link', '') or episode_url in entry.get('id', ''):
                     target_episode = entry
+                    print(f"  ✓ Found episode by URL match")
                     break
-        
+
+        # Fallback to latest with WARNING
         if not target_episode and feed.entries:
+            print(f"  ⚠️ WARNING: Could not find specific episode, using LATEST episode")
+            print(f"     Expected: {episode_title}")
+            print(f"     Using: {feed.entries[0].get('title', 'Unknown')}")
             target_episode = feed.entries[0]
-        
+
         if target_episode:
+            # Update episode title from RSS
+            if not episode_title:
+                episode_title = target_episode.get('title', 'Unknown Episode')
+
             # Get audio enclosure
             for enclosure in target_episode.get('enclosures', []):
                 if 'audio' in enclosure.get('type', ''):
                     audio_url = enclosure.get('href') or enclosure.get('url')
                     break
-    
-    # Use episode title from Listen Notes if available
-    if episode_title and not title:
-        title = episode_title
-    
+
     if not audio_url:
-        raise ValueError(
-            "Could not find audio URL for this episode. "
-            "This podcast may not provide direct audio access."
+        raise EpisodeNotFoundError(
+            f"Could not find audio URL for episode: '{episode_title}'\n"
+            f"Podcast: '{podcast_title}'\n"
+            "This specific episode may not be available or the podcast doesn't provide direct audio access."
         )
 
     # Download audio
@@ -2119,16 +2412,14 @@ def handle_podcast_content(podcast_url):
     print(f"  ✓ Audio downloaded")
 
     # Full transcription pipeline (Groq chunking → HuggingFace fallback)
-    # NO description/show notes fallback - we want real transcripts
     start_time = time.time()
     try:
-        transcript, mode_used = transcribe_podcast_full(audio_path, title)
+        transcript, mode_used = transcribe_podcast_full(audio_path, episode_title or "Unknown")
         duration = time.time() - start_time
 
         if transcript:
             print(f"  ✓ Full transcription complete ({mode_used})!")
 
-            # Record metrics
             if metrics:
                 metrics.record(mode_used, podcast_url, True, duration)
 
@@ -2140,7 +2431,7 @@ def handle_podcast_content(podcast_url):
                 pass
 
             label = f"Podcast Transcript ({mode_used.replace('_', ' ').title()})"
-            return title, transcript, label
+            return episode_title or "Unknown Episode", transcript, label
 
     except Exception as e:
         duration = time.time() - start_time
@@ -2159,6 +2450,119 @@ def handle_podcast_content(podcast_url):
         "Transcription failed. Ensure GROQ_API_KEY is set. "
         "For backup, you can also set HF_TOKEN (Hugging Face token)."
     )
+
+
+def fetch_transcript_from_rss_enhanced(rss_url, episode_url=None, target_episode_title=None):
+    """
+    Enhanced RSS transcript fetching with better episode matching.
+
+    Phase 4: Improved RSS fallback matching.
+
+    Args:
+        rss_url: RSS feed URL
+        episode_url: Optional specific episode URL to find
+        target_episode_title: Optional episode title to search for (from webpage scraping)
+
+    Returns:
+        tuple: (episode_title, transcript_text) or (episode_title, None) if no transcript
+    """
+    try:
+        import feedparser
+    except ImportError:
+        raise ImportError("feedparser required for podcast support. Install with: pip install feedparser")
+
+    try:
+        feed = feedparser.parse(rss_url)
+
+        if not feed.entries:
+            raise ValueError("RSS feed contains no episodes")
+
+        # Find target episode using multiple methods
+        target_episode = None
+        match_method = None
+
+        # Method 1: Direct URL matching (highest confidence)
+        if episode_url:
+            for entry in feed.entries:
+                entry_link = entry.get('link', '')
+                entry_id = entry.get('id', '')
+                if episode_url in entry_link or episode_url in entry_id:
+                    target_episode = entry
+                    match_method = "URL match"
+                    print(f"  🎯 Found episode by URL match: {entry.get('title', '')[:50]}...")
+                    break
+
+        # Method 2: Title matching from scraped metadata (high confidence)
+        if not target_episode and target_episode_title:
+            print(f"  🔍 Searching RSS for episode: '{target_episode_title[:50]}...'")
+            target_episode = find_episode_by_title(feed.entries, target_episode_title, threshold=0.5)
+            if target_episode:
+                match_method = "title match"
+
+        # Method 3: Extract title from URL slug and fuzzy match
+        if not target_episode and episode_url:
+            url_title = extract_episode_title_from_url(episode_url)
+            if url_title:
+                print(f"  🔍 Searching RSS by URL slug: '{url_title}'")
+                target_episode = find_episode_by_title(feed.entries, url_title, threshold=0.5)
+                if target_episode:
+                    match_method = "URL slug match"
+
+        # Fallback: Use most recent episode with WARNING
+        if not target_episode:
+            print(f"  ⚠️ Could not find specific episode in RSS feed")
+            print(f"     Using LATEST episode as fallback")
+            target_episode = feed.entries[0]
+            match_method = "latest fallback"
+        else:
+            print(f"  ✓ Episode matched via: {match_method}")
+
+        episode_title = target_episode.get('title', 'Unknown Episode')
+
+        # Check for Podcasting 2.0 transcript tags
+        transcript_url = None
+        transcript_type = None
+
+        if hasattr(target_episode, 'podcast_transcript'):
+            transcript_info = target_episode.podcast_transcript
+            if isinstance(transcript_info, list):
+                transcript_info = transcript_info[0]
+            transcript_url = transcript_info.get('url') or transcript_info.get('href')
+            transcript_type = transcript_info.get('type')
+
+        # Check in enclosures or links
+        if not transcript_url:
+            for link in target_episode.get('links', []):
+                if 'transcript' in link.get('type', '').lower():
+                    transcript_url = link.get('href')
+                    transcript_type = link.get('type')
+                    break
+
+        if not transcript_url:
+            return episode_title, None
+
+        # Download and parse transcript
+        print(f"  📥 Downloading transcript from RSS feed...")
+        response = requests.get(transcript_url, timeout=15)
+        response.raise_for_status()
+
+        # Parse based on type
+        if transcript_type and 'vtt' in transcript_type.lower():
+            transcript_text = parse_vtt_transcript(response.text)
+        elif transcript_type and 'srt' in transcript_type.lower():
+            transcript_text = parse_srt_transcript(response.text)
+        elif transcript_type and 'html' in transcript_type.lower():
+            transcript_text = parse_html_transcript(response.text)
+        elif transcript_type and 'json' in transcript_type.lower():
+            transcript_text = parse_json_transcript(response.text)
+        else:
+            transcript_text = auto_parse_transcript(response.text)
+
+        return episode_title, transcript_text
+
+    except Exception as e:
+        print(f"  ⚠️ Could not extract transcript from RSS: {e}")
+        return None, None
 
 
 def handle_podcast_search(search_query):
