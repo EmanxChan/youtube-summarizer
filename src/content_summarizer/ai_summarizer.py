@@ -7,9 +7,28 @@ Supports OpenAI, Anthropic Claude, and Ollama.
 import os
 import json
 import sys
+import time
+import re
 from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 import tiktoken
+
+
+# Groq model fallback chain (largest to smallest)
+GROQ_MODEL_FALLBACK_CHAIN = [
+    "llama-3.3-70b-versatile",      # Best quality, highest token usage
+    "llama-3.1-70b-versatile",      # Fallback large model
+    "llama-3.1-8b-instant",         # Fast, low token usage
+    "llama-3.2-3b-preview",         # Smallest, emergency fallback
+]
+
+
+class RateLimitError(Exception):
+    """Raised when API rate limit is exceeded."""
+    def __init__(self, message, retry_after=None, model=None):
+        super().__init__(message)
+        self.retry_after = retry_after  # Seconds to wait
+        self.model = model
 
 
 class AITranscriptSummarizer:
@@ -139,10 +158,10 @@ class AITranscriptSummarizer:
         """Initialize Groq client (OpenAI-compatible API)"""
         try:
             import openai
-            
+
             # Try to get API key from environment or config
             self.api_key = os.getenv('GROQ_API_KEY')
-            
+
             if not self.api_key:
                 # Try to load from config file
                 config_path = Path.home() / '.youtube_summarizer' / 'config.json'
@@ -150,19 +169,133 @@ class AITranscriptSummarizer:
                     with open(config_path, 'r') as f:
                         config = json.load(f)
                         self.api_key = config.get('groq_api_key')
-            
+
             if not self.api_key:
                 raise ValueError("Groq API key not found. Set GROQ_API_KEY environment variable.")
-            
+
             # Groq uses OpenAI-compatible API with custom base URL
             self.client = openai.OpenAI(
                 api_key=self.api_key,
                 base_url="https://api.groq.com/openai/v1"
             )
-            self.model = self.model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")  # Default to high-quality model
-            
+            self.model = self.model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+            # Track original model and fallback state
+            self.original_model = self.model
+            self.using_fallback = False
+            self.fallback_model = None
+
         except ImportError:
             raise ImportError("OpenAI library not installed. Run: pip install openai")
+
+    def _groq_api_call_with_fallback(self, messages, temperature=0.7, max_tokens=800):
+        """
+        Make Groq API call with automatic rate limit handling and model fallback.
+
+        When rate limit is hit:
+        1. Log the error clearly
+        2. Try smaller models in the fallback chain
+        3. If all models fail, raise the error
+
+        Args:
+            messages: List of message dicts for chat completion
+            temperature: Sampling temperature
+            max_tokens: Max tokens in response
+
+        Returns:
+            Response content string
+
+        Raises:
+            RateLimitError: If all fallback models are also rate limited
+        """
+        import openai
+
+        # Build list of models to try (current model + smaller fallbacks)
+        models_to_try = [self.model]
+
+        # Add fallback models that are smaller than current
+        try:
+            current_idx = GROQ_MODEL_FALLBACK_CHAIN.index(self.model)
+            models_to_try.extend(GROQ_MODEL_FALLBACK_CHAIN[current_idx + 1:])
+        except ValueError:
+            # Current model not in chain, add all fallbacks
+            models_to_try.extend(GROQ_MODEL_FALLBACK_CHAIN)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        models_to_try = [m for m in models_to_try if not (m in seen or seen.add(m))]
+
+        last_error = None
+
+        for model in models_to_try:
+            try:
+                if model != self.model:
+                    print(f"  ⚠️ RATE LIMIT: Switching from {self.model} to fallback model: {model}", file=sys.stderr)
+                    self.using_fallback = True
+                    self.fallback_model = model
+
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+
+                if model != self.original_model:
+                    print(f"  ✓ Fallback model {model} succeeded", file=sys.stderr)
+
+                return response.choices[0].message.content
+
+            except openai.RateLimitError as e:
+                last_error = e
+                error_msg = str(e)
+
+                # Parse retry time from error message
+                retry_after = None
+                retry_match = re.search(r'try again in (\d+)m?([\d.]+)?s?', error_msg, re.IGNORECASE)
+                if retry_match:
+                    minutes = int(retry_match.group(1)) if retry_match.group(1) else 0
+                    seconds = float(retry_match.group(2)) if retry_match.group(2) else 0
+                    retry_after = minutes * 60 + seconds
+
+                print(f"  ⚠️ RATE LIMIT on {model}: {error_msg[:100]}...", file=sys.stderr)
+
+                # If this is a daily limit, try next model
+                if 'tokens per day' in error_msg.lower() or 'TPD' in error_msg:
+                    print(f"  ℹ️ Daily token limit reached for {model}, trying smaller model...", file=sys.stderr)
+                    continue
+
+                # If it's a per-minute limit, wait briefly then try next model
+                if 'tokens per minute' in error_msg.lower() or 'TPM' in error_msg:
+                    if retry_after and retry_after < 30:
+                        print(f"  ⏳ Waiting {retry_after:.0f}s for rate limit reset...", file=sys.stderr)
+                        time.sleep(retry_after + 1)
+                        # Retry same model after waiting
+                        try:
+                            response = self.client.chat.completions.create(
+                                model=model,
+                                messages=messages,
+                                temperature=temperature,
+                                max_tokens=max_tokens
+                            )
+                            return response.choices[0].message.content
+                        except:
+                            pass
+                    continue
+
+                # Unknown rate limit type, try next model
+                continue
+
+            except Exception as e:
+                # Non-rate-limit error, don't try fallbacks
+                raise
+
+        # All models failed
+        print(f"  ❌ All Groq models rate limited. Please wait or upgrade your plan.", file=sys.stderr)
+        raise RateLimitError(
+            f"All Groq models are rate limited. Last error: {last_error}",
+            model=self.model
+        )
     
     def count_tokens(self, text: str) -> int:
         """Count tokens in text for rate limiting"""
@@ -250,7 +383,18 @@ Generate {count} insights matching this quality standard. Each must start with O
 Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight text."""
 
         try:
-            if self.provider in ["openai", "deepseek", "groq"]:
+            if self.provider == "groq":
+                # Use fallback-aware method for Groq
+                content = self._groq_api_call_with_fallback(
+                    messages=[
+                        {"role": "system", "content": "You are a world-class analyst who reveals profound insights and non-obvious patterns."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.6,
+                    max_tokens=800
+                )
+
+            elif self.provider in ["openai", "deepseek"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -261,7 +405,7 @@ Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight 
                     max_tokens=800
                 )
                 content = response.choices[0].message.content
-                
+
             elif self.provider == "anthropic":
                 response = self.client.messages.create(
                     model=self.model,
@@ -369,7 +513,19 @@ CRITICAL REQUIREMENTS:
 Return ONLY the summary text with paragraph breaks, no headers or labels."""
 
         try:
-            if self.provider in ["openai", "deepseek", "groq"]:
+            if self.provider == "groq":
+                # Use fallback-aware method for Groq
+                content = self._groq_api_call_with_fallback(
+                    messages=[
+                        {"role": "system", "content": "You are an expert technical writer."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=word_count * 2
+                )
+                return content.strip()
+
+            elif self.provider in ["openai", "deepseek"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -380,7 +536,7 @@ Return ONLY the summary text with paragraph breaks, no headers or labels."""
                     max_tokens=word_count * 2  # Tokens != words, give some buffer
                 )
                 return response.choices[0].message.content.strip()
-                
+
             elif self.provider == "anthropic":
                 response = self.client.messages.create(
                     model=self.model,
@@ -389,7 +545,7 @@ Return ONLY the summary text with paragraph breaks, no headers or labels."""
                     temperature=0.7
                 )
                 return response.content[0].text.strip()
-                
+
             elif self.provider == "ollama":
                 import requests
                 response = requests.post(
@@ -401,10 +557,13 @@ Return ONLY the summary text with paragraph breaks, no headers or labels."""
                     }
                 )
                 return response.json()["response"].strip()
-            
+
             else:
                 return ""
-                
+
+        except RateLimitError as e:
+            print(f"Rate limit error generating summary: {e}", file=sys.stderr)
+            return ""
         except Exception as e:
             print(f"Error generating summary: {e}", file=sys.stderr)
             return ""
@@ -496,7 +655,18 @@ EXAMPLE FORMAT:
 Return ONLY {count} highlights, one per line. Use > prefix for each."""
 
         try:
-            if self.provider in ["openai", "deepseek", "groq"]:
+            if self.provider == "groq":
+                # Use fallback-aware method for Groq
+                content = self._groq_api_call_with_fallback(
+                    messages=[
+                        {"role": "system", "content": "You are an expert at identifying the most impactful moments and quotes from content."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.5,
+                    max_tokens=800
+                )
+
+            elif self.provider in ["openai", "deepseek"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -595,7 +765,15 @@ Examples:
 Return ONLY the 3 next steps, one per line."""
 
         try:
-            if self.provider in ["openai", "deepseek", "groq"]:
+            if self.provider == "groq":
+                # Use fallback-aware method for Groq
+                content = self._groq_api_call_with_fallback(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=200
+                )
+
+            elif self.provider in ["openai", "deepseek"]:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
@@ -603,7 +781,7 @@ Return ONLY the 3 next steps, one per line."""
                     max_tokens=200
                 )
                 content = response.choices[0].message.content
-                
+
             elif self.provider == "anthropic":
                 response = self.client.messages.create(
                     model=self.model,
@@ -612,7 +790,7 @@ Return ONLY the 3 next steps, one per line."""
                     temperature=0.7
                 )
                 content = response.content[0].text
-                
+
             elif self.provider == "ollama":
                 import requests
                 response = requests.post(
@@ -624,17 +802,20 @@ Return ONLY the 3 next steps, one per line."""
                     }
                 )
                 content = response.json()["response"]
-            
+
             else:
                 return []
-            
+
             # Parse response
-            steps = [line.strip().lstrip('0123456789.-•* \t') 
-                    for line in content.strip().split('\n') 
+            steps = [line.strip().lstrip('0123456789.-•* \t')
+                    for line in content.strip().split('\n')
                     if line.strip()]
-            
+
             return steps[:3]
-            
+
+        except RateLimitError as e:
+            print(f"Rate limit error generating next steps: {e}", file=sys.stderr)
+            return []
         except Exception as e:
             print(f"Error generating next steps: {e}", file=sys.stderr)
             return []
