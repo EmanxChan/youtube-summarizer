@@ -73,80 +73,14 @@ apply_dark_mode()
 # Add info box
 st.info("✨ **Supports YouTube videos, podcasts, articles, files, and text** • AI-powered summaries with key takeaways")
 
-# === History Sidebar ===
-with st.sidebar:
-    st.markdown("## 📜 History")
-
-    # Search box
-    history_search = st.text_input(
-        "Search history",
-        placeholder="Search by title or URL...",
-        label_visibility="collapsed",
-        key="history_search"
-    )
-
-    # Filter buttons
-    history_filter = st.radio(
-        "Filter",
-        ["All", "Video", "Podcast", "Article"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="history_filter"
-    )
-
-    # Get history entries
-    history_manager = get_history_manager()
-    filter_type = None if history_filter == "All" else history_filter.lower()
-    history_entries = history_manager.get_entries(
-        limit=20,
-        content_type=filter_type,
-        search_query=history_search if history_search else None
-    )
-
-    if history_entries:
-        for entry in history_entries:
-            formatted = history_manager.format_entry_for_display(entry)
-
-            # Create clickable history item
-            with st.container():
-                col1, col2 = st.columns([1, 6])
-                with col1:
-                    st.markdown(f"### {formatted['icon']}")
-                with col2:
-                    title = formatted.get('title', 'Untitled')[:40]
-                    if len(formatted.get('title', '')) > 40:
-                        title += "..."
-
-                    st.markdown(f"**{title}**")
-                    st.caption(f"{formatted['domain']} • {formatted['time_ago']}")
-
-                # Re-process button
-                if st.button("🔄 Re-process", key=f"reprocess_{entry['id']}", use_container_width=True):
-                    st.session_state.reprocess_url = entry.get('url', '')
-                    st.rerun()
-
-                st.markdown("---")
-    else:
-        st.caption("No history yet. Summaries will appear here.")
-
-    # Stats at bottom
-    stats = history_manager.get_stats()
-    if stats['total_entries'] > 0:
-        st.caption(f"📊 {stats['total_entries']} total summaries")
-
-# Handle re-process from history
-if 'reprocess_url' in st.session_state and st.session_state.reprocess_url:
-    reprocess_url = st.session_state.reprocess_url
-    st.session_state.reprocess_url = None
-    # Will be handled by the URL input below
-
 # === Tabbed Input Interface with Dedicated Content Types ===
-tab_yt, tab_podcast, tab_article, tab_upload, tab_text = st.tabs([
+tab_yt, tab_podcast, tab_article, tab_upload, tab_text, tab_history = st.tabs([
     "🎬 YouTube",
     "🎙️ Podcast",
     "📰 Article",
     "📎 Upload",
-    "📝 Text"
+    "📝 Text",
+    "📜 History"
 ])
 
 input_type = None
@@ -295,7 +229,92 @@ with tab_text:
     elif text_area:
         st.warning("⚠️ Text seems too short (need at least 50 characters)")
 
-# Shared controls
+with tab_history:
+    st.markdown("### Summarization History")
+    st.caption("View and re-process your past summaries")
+
+    # Search and filter row
+    hist_col1, hist_col2 = st.columns([3, 1])
+    with hist_col1:
+        history_search = st.text_input(
+            "Search history",
+            placeholder="Search by title or URL...",
+            label_visibility="collapsed",
+            key="history_search"
+        )
+    with hist_col2:
+        history_filter = st.selectbox(
+            "Filter",
+            ["All", "Video", "Podcast", "Article"],
+            label_visibility="collapsed",
+            key="history_filter"
+        )
+
+    # Get history entries
+    history_manager = get_history_manager()
+    filter_type = None if history_filter == "All" else history_filter.lower()
+    history_entries = history_manager.get_entries(
+        limit=50,
+        content_type=filter_type,
+        search_query=history_search if history_search else None
+    )
+
+    if history_entries:
+        # Stats header
+        stats = history_manager.get_stats()
+        st.caption(f"📊 Showing {len(history_entries)} of {stats['total_entries']} total summaries")
+
+        st.markdown("---")
+
+        for entry in history_entries:
+            formatted = history_manager.format_entry_for_display(entry)
+
+            # History entry card
+            with st.container():
+                col_icon, col_info, col_action = st.columns([1, 6, 2])
+
+                with col_icon:
+                    st.markdown(f"## {formatted['icon']}")
+
+                with col_info:
+                    title = formatted.get('title', 'Untitled')
+                    if len(title) > 60:
+                        title = title[:60] + "..."
+                    st.markdown(f"**{title}**")
+
+                    # Show URL domain and time
+                    url = entry.get('url', '')
+                    domain = formatted.get('domain', '')
+                    time_ago = formatted.get('time_ago', '')
+                    st.caption(f"{domain} • {time_ago}")
+
+                    # Show summary preview if available
+                    preview = entry.get('summary_preview', '')
+                    if preview:
+                        st.caption(f"_{preview[:100]}..._" if len(preview) > 100 else f"_{preview}_")
+
+                with col_action:
+                    # Re-process button - triggers actual processing
+                    entry_url = entry.get('url', '')
+                    # Skip non-URL entries (pasted text, uploaded files)
+                    if entry_url and not entry_url.startswith(('text://', 'file://')):
+                        if st.button("🔄 Re-process", key=f"reprocess_{entry['id']}", use_container_width=True):
+                            st.session_state.trigger_reprocess = entry_url
+                            st.rerun()
+
+                st.markdown("---")
+    else:
+        st.info("📭 No history yet. Your summarized content will appear here.")
+        st.caption("Process a YouTube video, podcast, or article to get started.")
+
+# Handle re-process trigger (must be outside tabs to work)
+if 'trigger_reprocess' in st.session_state and st.session_state.trigger_reprocess:
+    reprocess_url = st.session_state.trigger_reprocess
+    st.session_state.trigger_reprocess = None
+    # Set flag to auto-process after displaying controls
+    st.session_state.auto_process_url = reprocess_url
+
+# Shared controls (only show when not in history tab or when auto-processing)
 st.markdown("---")
 words = st.slider("📊 Summary length (words)", 50, 3000, DEFAULT_WORDS, step=50)
 
@@ -305,6 +324,14 @@ if 'processing_complete' not in st.session_state:
 
 # Show Summarize button (only show once, clean state)
 run = st.button("✨ Summarize", type="primary", use_container_width=True)
+
+# Check for auto-process from history re-process
+auto_process_url = st.session_state.pop('auto_process_url', None)
+if auto_process_url:
+    st.info(f"🔄 Re-processing: {auto_process_url[:60]}...")
+    input_type = "url"
+    content = auto_process_url
+    run = True  # Trigger processing
 
 
 # ============================================================================
