@@ -309,11 +309,19 @@ class AITranscriptSummarizer:
             # Rough estimate for other providers
             return len(text.split()) * 1.3
     
-    def generate_key_takeaways(self, transcript: str, video_title: str, 
-                               count: int = 5) -> List[str]:
+    def generate_key_takeaways(self, transcript: str, video_title: str,
+                               count: int = 5, focus_area: str = None,
+                               tone: str = None) -> List[str]:
         """
         Generate high-level conceptual insights from transcript.
-        
+
+        Args:
+            transcript: The content transcript
+            video_title: Title of the content
+            count: Number of takeaways to generate
+            focus_area: Optional focus area (General, Technical, Business, Learning, Quick Overview)
+            tone: Optional tone (Professional, Casual, Academic, Bullet Points)
+
         Returns:
             List of insight strings
         """
@@ -321,8 +329,29 @@ class AITranscriptSummarizer:
         max_chars = 12000  # Roughly 3000 tokens
         if len(transcript) > max_chars:
             transcript = transcript[:max_chars]
-        
-        prompt = f"""You are a world-class analyst who extracts profound, non-obvious insights from educational content. Your insights reveal deeper patterns, tradeoffs, and strategic implications that most people miss.
+
+        # Build focus area instruction
+        focus_instruction = ""
+        if focus_area and focus_area != "General":
+            focus_map = {
+                "Technical": "Focus heavily on technical details, methodologies, tools, implementation specifics, and how things work under the hood.",
+                "Business": "Emphasize business implications, ROI, market insights, strategic value, competitive advantages, and practical business applications.",
+                "Learning": "Highlight educational takeaways, key concepts to remember, learning progressions, and actionable knowledge that can be applied immediately.",
+                "Quick Overview": "Be extremely concise. Focus only on the most essential, high-impact points. Skip nuance in favor of clarity.",
+            }
+            focus_instruction = f"\n\nFOCUS AREA: {focus_map.get(focus_area, '')}"
+
+        # Build tone instruction
+        tone_instruction = ""
+        if tone and tone != "Professional":
+            tone_map = {
+                "Casual": "Use conversational, approachable language. Write as if explaining to a friend over coffee.",
+                "Academic": "Use formal, precise language with emphasis on accuracy, nuance, and intellectual depth.",
+                "Bullet Points": "Be extremely concise. Use short, punchy sentences. Prioritize scannability over prose.",
+            }
+            tone_instruction = f"\n\nTONE: {tone_map.get(tone, '')}"
+
+        prompt = f"""You are a world-class analyst who extracts profound, non-obvious insights from educational content. Your insights reveal deeper patterns, tradeoffs, and strategic implications that most people miss.{focus_instruction}{tone_instruction}
 
 Title: {video_title}
 Content: {transcript}
@@ -465,11 +494,19 @@ Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight 
             print(f"Error generating takeaways: {e}", file=sys.stderr)
             return []
     
-    def generate_executive_summary(self, transcript: str, video_title: str, 
-                                  word_count: int = 200) -> str:
+    def generate_executive_summary(self, transcript: str, video_title: str,
+                                  word_count: int = 200, focus_area: str = None,
+                                  tone: str = None) -> str:
         """
         Generate a coherent executive summary of the video.
-        
+
+        Args:
+            transcript: The content transcript
+            video_title: Title of the content
+            word_count: Target word count for summary
+            focus_area: Optional focus area (General, Technical, Business, Learning, Quick Overview)
+            tone: Optional tone (Professional, Casual, Academic, Bullet Points)
+
         Returns:
             Executive summary string
         """
@@ -481,11 +518,32 @@ Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight 
             transcript = transcript[:third] + " [...] " + \
                         transcript[len(transcript)//2 - third//2:len(transcript)//2 + third//2] + \
                         " [...] " + transcript[-third:]
-        
+
         # Calculate words per paragraph for guidance
         words_per_paragraph = word_count // 4
-        
-        prompt = f"""You are an expert at creating executive summaries for educational and technical content.
+
+        # Build focus area instruction
+        focus_instruction = ""
+        if focus_area and focus_area != "General":
+            focus_map = {
+                "Technical": "Emphasize technical details, methodologies, tools, and implementation specifics throughout the summary.",
+                "Business": "Focus on business implications, ROI, market insights, strategic value, and practical business applications.",
+                "Learning": "Highlight educational value, key concepts, learning outcomes, and actionable knowledge.",
+                "Quick Overview": "Be direct and concise. Hit only the essential points without extensive elaboration.",
+            }
+            focus_instruction = f"\n\nFOCUS AREA: {focus_map.get(focus_area, '')}"
+
+        # Build tone instruction
+        tone_instruction = ""
+        if tone and tone != "Professional":
+            tone_map = {
+                "Casual": "Write in a conversational, approachable tone. Use everyday language and avoid jargon.",
+                "Academic": "Use formal, precise academic language with attention to nuance and intellectual rigor.",
+                "Bullet Points": "Structure the summary using bullet points and short paragraphs. Prioritize scannability.",
+            }
+            tone_instruction = f"\n\nTONE: {tone_map.get(tone, '')}"
+
+        prompt = f"""You are an expert at creating executive summaries for educational and technical content.{focus_instruction}{tone_instruction}
 
 Video Title: {video_title}
 Transcript: {transcript}

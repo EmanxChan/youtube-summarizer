@@ -3503,7 +3503,13 @@ def handle_youtube_command(args):
                        help='Fast mode: skip AI processing, use extraction only (2-3x faster)')
     parser.add_argument('--show-metrics', action='store_true',
                        help='Display transcript source metrics summary')
-    
+    parser.add_argument('--focus-area', type=str, default='General',
+                       choices=['General', 'Technical', 'Business', 'Learning', 'Quick Overview'],
+                       help='Focus area for summary (default: General)')
+    parser.add_argument('--tone', type=str, default='Professional',
+                       choices=['Professional', 'Casual', 'Academic', 'Bullet Points'],
+                       help='Tone for summary (default: Professional)')
+
     # AI provider options
     if AI_AVAILABLE:
         parser.add_argument('--ai-provider', choices=['openai', 'anthropic', 'deepseek', 'ollama', 'openrouter', 'groq', 'none'],
@@ -3530,7 +3536,11 @@ def handle_youtube_command(args):
     # AI provider settings
     ai_provider = getattr(parsed_args, 'ai_provider', 'none')
     ai_model = getattr(parsed_args, 'ai_model', None)
-    
+
+    # Custom prompt settings
+    focus_area = getattr(parsed_args, 'focus_area', 'General')
+    tone = getattr(parsed_args, 'tone', 'Professional')
+
     # Fast mode overrides AI
     if fast_mode:
         ai_provider = 'none'
@@ -3804,14 +3814,17 @@ def handle_youtube_command(args):
     
     # Use AI if available, otherwise fallback to extraction
     if ai_summarizer:
-        # Check cache first
-        cache_params = {'word_count': word_count, 'title': content_title or "Content"}
+        # Check cache first (include focus/tone in cache key)
+        cache_params = {'word_count': word_count, 'title': content_title or "Content", 'focus': focus_area, 'tone': tone}
         cached_summary = get_cached_ai_response(content_text, 'summary', cache_params)
-        
+
         if cached_summary:
             summary = cached_summary
         else:
-            summary = ai_summarizer.generate_executive_summary(content_text, content_title or "Content", word_count)
+            summary = ai_summarizer.generate_executive_summary(
+                content_text, content_title or "Content", word_count,
+                focus_area=focus_area, tone=tone
+            )
             if summary:
                 save_ai_response(content_text, 'summary', cache_params, summary)
             else:
@@ -3830,15 +3843,18 @@ def handle_youtube_command(args):
         
         # Use AI if available
         if ai_summarizer:
-            # Check cache first
-            cache_params = {'count': takeaways_count, 'title': content_title or "Content"}
+            # Check cache first (include focus/tone in cache key)
+            cache_params = {'count': takeaways_count, 'title': content_title or "Content", 'focus': focus_area, 'tone': tone}
             cached_takeaways = get_cached_ai_response(content_text, 'takeaways', cache_params)
-            
+
             if cached_takeaways:
                 takeaways = cached_takeaways
             else:
                 # Takeaways now come with emojis from the AI prompt
-                takeaways = ai_summarizer.generate_key_takeaways(content_text, content_title or "Content", takeaways_count)
+                takeaways = ai_summarizer.generate_key_takeaways(
+                    content_text, content_title or "Content", takeaways_count,
+                    focus_area=focus_area, tone=tone
+                )
                 if takeaways:
                     save_ai_response(content_text, 'takeaways', cache_params, takeaways)
                 else:
