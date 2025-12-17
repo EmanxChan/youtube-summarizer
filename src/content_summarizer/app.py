@@ -721,12 +721,18 @@ def process_url(url, words):
         script_path = ROOT / "src" / "content_summarizer" / "youtube_slash_command.py"
         
         # Use sys.executable to ensure subprocess uses same Python interpreter with installed packages
+        # Get custom prompt settings from session state
+        focus = st.session_state.get('focus_area', 'General')
+        tone_setting = st.session_state.get('tone', 'Professional')
+
         cmd = [
             sys.executable, str(script_path), url,
             "--format", "md",
             "--words", str(words),
             "--ai-provider", os.getenv("AI_PROVIDER", "groq"),
-            "--ai-model", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+            "--ai-model", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            "--focus-area", focus,
+            "--tone", tone_setting
         ]
         
         status_placeholder.info("📥 Fetching content...")
@@ -856,9 +862,13 @@ def display_url_results():
 
 def process_file(uploaded_file, words):
     """Process uploaded audio/video/PDF file"""
-    
+
     # Check if PDF
     is_pdf = uploaded_file.name.lower().endswith('.pdf')
+
+    # Get custom prompt settings from session state
+    focus = st.session_state.get('focus_area', 'General')
+    tone_setting = st.session_state.get('tone', 'Professional')
     
     # Create progress placeholder
     progress_text = st.empty()
@@ -979,13 +989,13 @@ try:
         transcript = clean_pdf_text(raw_text)
     
     print(f"Text extraction complete: {{len(transcript)}} characters", file=sys.stderr)
-    
+
     # Summarize
     print("Starting summarization...", file=sys.stderr)
     summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
-    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5)
-    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words})
-    
+    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5, focus_area="{focus}", tone="{tone_setting}")
+    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words}, focus_area="{focus}", tone="{tone_setting}")
+
     # Save to correct folder (PDFs go to article folder)
     from pathlib import Path
     from datetime import datetime
@@ -1047,13 +1057,13 @@ try:
     print("Starting transcription...", file=sys.stderr)
     transcript, mode = transcribe_audio_whisper("{temp_path}", mode='full', max_duration_minutes=120)
     print(f"Transcription complete: {{len(transcript)}} characters", file=sys.stderr)
-    
+
     # Summarize
     print("Starting summarization...", file=sys.stderr)
     summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
-    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5)
-    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words})
-    
+    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5, focus_area="{focus}", tone="{tone_setting}")
+    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words}, focus_area="{focus}", tone="{tone_setting}")
+
     # Save to correct folder (Zoom files go to youtube folder)
     import os
     from pathlib import Path
@@ -1211,7 +1221,11 @@ except Exception as e:
 
 def process_text(text_content, words):
     """Process pasted text directly"""
-    
+
+    # Get custom prompt settings from session state
+    focus = st.session_state.get('focus_area', 'General')
+    tone_setting = st.session_state.get('tone', 'Professional')
+
     status_placeholder = st.empty()
     status_placeholder.info("✨ Generating AI summary...")
     
@@ -1246,9 +1260,9 @@ title = "Pasted Content"
 
 try:
     summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
-    takeaways = summarizer.generate_key_takeaways(transcript, title, count=5)
-    summary = summarizer.generate_executive_summary(transcript, title, word_count={words})
-    
+    takeaways = summarizer.generate_key_takeaways(transcript, title, count=5, focus_area="{focus}", tone="{tone_setting}")
+    summary = summarizer.generate_executive_summary(transcript, title, word_count={words}, focus_area="{focus}", tone="{tone_setting}")
+
     # Save to correct folder (pasted text goes to article folder)
     from pathlib import Path
     from datetime import datetime
