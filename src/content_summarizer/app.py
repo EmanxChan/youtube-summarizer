@@ -7,6 +7,8 @@ import streamlit as st
 import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime
+import json
 
 # Add src directory to Python path for module imports
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +16,91 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from content_summarizer.style import apply_dark_mode
 from content_summarizer.history_manager import get_history_manager, record_history
+
+
+# ============================================================================
+# Token Usage Tracking
+# ============================================================================
+
+GROQ_DAILY_TOKEN_LIMITS = {
+    "llama-3.3-70b-versatile": 100_000,
+    "llama-3.1-70b-versatile": 100_000,
+    "llama-3.1-8b-instant": 500_000,
+    "llama-3.2-3b-preview": 500_000,
+}
+
+def get_token_usage_path():
+    """Get path to token usage tracking file."""
+    usage_dir = Path.home() / '.youtube_summarizer'
+    usage_dir.mkdir(parents=True, exist_ok=True)
+    return usage_dir / 'token_usage.json'
+
+def load_token_usage():
+    """Load token usage from file."""
+    path = get_token_usage_path()
+    if path.exists():
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+                # Reset if different day
+                if data.get('date') != datetime.now().strftime('%Y-%m-%d'):
+                    return {'date': datetime.now().strftime('%Y-%m-%d'), 'tokens_used': 0, 'requests': 0}
+                return data
+        except:
+            pass
+    return {'date': datetime.now().strftime('%Y-%m-%d'), 'tokens_used': 0, 'requests': 0}
+
+def save_token_usage(tokens_used, requests=1):
+    """Save token usage to file."""
+    data = load_token_usage()
+    data['tokens_used'] = data.get('tokens_used', 0) + tokens_used
+    data['requests'] = data.get('requests', 0) + requests
+    data['date'] = datetime.now().strftime('%Y-%m-%d')
+    data['last_updated'] = datetime.now().isoformat()
+
+    with open(get_token_usage_path(), 'w') as f:
+        json.dump(data, f, indent=2)
+
+def estimate_tokens(text):
+    """Estimate tokens for text (rough estimate: ~4 chars per token)."""
+    if not text:
+        return 0
+    return len(text) // 4
+
+def estimate_processing_tokens(content_type, word_count):
+    """Estimate tokens needed for a processing request."""
+    # Base estimates for different content types
+    base_estimates = {
+        'url': 4000,      # Transcript fetch + processing
+        'file': 5000,     # Transcription + processing
+        'text': 2000,     # Direct text processing
+    }
+
+    # Adjust based on word count
+    output_tokens = word_count * 2  # Summary output estimate
+    input_estimate = base_estimates.get(content_type, 3000)
+
+    return input_estimate + output_tokens
+
+
+# ============================================================================
+# Custom Prompt Templates
+# ============================================================================
+
+FOCUS_AREAS = {
+    "General": "Provide a balanced overview covering all key points.",
+    "Technical": "Focus on technical details, methodologies, tools, and implementation specifics.",
+    "Business": "Emphasize business implications, ROI, market insights, and strategic value.",
+    "Learning": "Highlight educational takeaways, concepts to remember, and actionable learning points.",
+    "Quick Overview": "Provide a very concise summary hitting only the most essential points.",
+}
+
+TONE_OPTIONS = {
+    "Professional": "Use clear, professional language suitable for business contexts.",
+    "Casual": "Use conversational, approachable language that's easy to digest.",
+    "Academic": "Use formal, detailed language with emphasis on accuracy and depth.",
+    "Bullet Points": "Prioritize bullet points and lists over prose for easy scanning.",
+}
 
 # Load environment variables from .env file (project root)
 load_dotenv(ROOT / ".env")
@@ -69,6 +156,39 @@ with col2:
 
 # Apply dark mode theme
 apply_dark_mode()
+
+# === Token Usage Dashboard (Sidebar) ===
+with st.sidebar:
+    st.markdown("## 📊 Token Usage")
+
+    usage = load_token_usage()
+    tokens_used = usage.get('tokens_used', 0)
+    requests_today = usage.get('requests', 0)
+
+    # Default limit for primary model
+    daily_limit = GROQ_DAILY_TOKEN_LIMITS.get("llama-3.3-70b-versatile", 100_000)
+    usage_percent = min((tokens_used / daily_limit) * 100, 100)
+
+    # Color based on usage
+    if usage_percent < 50:
+        bar_color = "green"
+        status_emoji = "✅"
+    elif usage_percent < 80:
+        bar_color = "orange"
+        status_emoji = "⚠️"
+    else:
+        bar_color = "red"
+        status_emoji = "🔴"
+
+    st.progress(usage_percent / 100)
+    st.caption(f"{status_emoji} **{tokens_used:,}** / {daily_limit:,} tokens today")
+    st.caption(f"📝 {requests_today} requests made")
+
+    if usage_percent >= 80:
+        st.warning("⚠️ Approaching daily limit. May fallback to smaller models.")
+
+    st.markdown("---")
+    st.caption("💡 Groq free tier resets daily at midnight UTC")
 
 # Add info box
 st.info("✨ **Supports YouTube videos, podcasts, articles, files, and text** • AI-powered summaries with key takeaways")
@@ -259,6 +379,14 @@ with tab_history:
         search_query=history_search if history_search else None
     )
 
+    # Handle delete action
+    if 'delete_entry_id' in st.session_state and st.session_state.delete_entry_id:
+        entry_to_delete = st.session_state.delete_entry_id
+        st.session_state.delete_entry_id = None
+        if history_manager.delete_entry(entry_to_delete):
+            st.success("✓ Entry deleted from history")
+            st.rerun()
+
     if history_entries:
         # Stats header
         stats = history_manager.get_stats()
@@ -268,22 +396,24 @@ with tab_history:
 
         for entry in history_entries:
             formatted = history_manager.format_entry_for_display(entry)
+            entry_id = entry.get('id', '')
+            entry_url = entry.get('url', '')
+            entry_title = formatted.get('title', 'Untitled')
 
             # History entry card
             with st.container():
-                col_icon, col_info, col_action = st.columns([1, 6, 2])
+                col_icon, col_info, col_actions = st.columns([1, 5, 3])
 
                 with col_icon:
                     st.markdown(f"## {formatted['icon']}")
 
                 with col_info:
-                    title = formatted.get('title', 'Untitled')
-                    if len(title) > 60:
-                        title = title[:60] + "..."
+                    title = entry_title
+                    if len(title) > 50:
+                        title = title[:50] + "..."
                     st.markdown(f"**{title}**")
 
                     # Show URL domain and time
-                    url = entry.get('url', '')
                     domain = formatted.get('domain', '')
                     time_ago = formatted.get('time_ago', '')
                     st.caption(f"{domain} • {time_ago}")
@@ -291,16 +421,72 @@ with tab_history:
                     # Show summary preview if available
                     preview = entry.get('summary_preview', '')
                     if preview:
-                        st.caption(f"_{preview[:100]}..._" if len(preview) > 100 else f"_{preview}_")
+                        st.caption(f"_{preview[:80]}..._" if len(preview) > 80 else f"_{preview}_")
 
-                with col_action:
-                    # Re-process button - triggers actual processing
-                    entry_url = entry.get('url', '')
-                    # Skip non-URL entries (pasted text, uploaded files)
+                with col_actions:
+                    # Quick action buttons in a row
+                    btn_col1, btn_col2, btn_col3 = st.columns(3)
+
+                    with btn_col1:
+                        # Copy URL button
+                        if entry_url and not entry_url.startswith(('text://', 'file://')):
+                            # Use a text input trick for copy functionality
+                            if st.button("📋", key=f"copy_{entry_id}", help="Copy URL"):
+                                st.session_state[f"copied_url_{entry_id}"] = entry_url
+                                st.toast(f"URL copied!", icon="✅")
+
+                    with btn_col2:
+                        # Export to notetaker
+                        if st.button("📤", key=f"export_{entry_id}", help="Export for Notetaker"):
+                            # Generate Notion/Obsidian formatted export
+                            export_text = f"""# {entry_title}
+
+**Source:** {entry_url}
+**Type:** {entry.get('content_type', 'Unknown').title()}
+**Date:** {entry.get('created_at', '')[:10]}
+
+---
+
+## Summary Preview
+{entry.get('summary_preview', 'No preview available')}
+
+---
+
+> Exported from Content Summarizer
+"""
+                            st.session_state[f"export_{entry_id}"] = export_text
+
+                    with btn_col3:
+                        # Delete button
+                        if st.button("🗑️", key=f"delete_{entry_id}", help="Delete from history"):
+                            st.session_state.delete_entry_id = entry_id
+                            st.rerun()
+
+                    # Re-process button (full width below)
                     if entry_url and not entry_url.startswith(('text://', 'file://')):
-                        if st.button("🔄 Re-process", key=f"reprocess_{entry['id']}", use_container_width=True):
+                        if st.button("🔄 Re-process", key=f"reprocess_{entry_id}", use_container_width=True):
                             st.session_state.trigger_reprocess = entry_url
                             st.rerun()
+
+                # Show copied URL if just copied
+                if st.session_state.get(f"copied_url_{entry_id}"):
+                    st.code(st.session_state[f"copied_url_{entry_id}"], language=None)
+                    st.caption("👆 Select and copy the URL above")
+                    if st.button("Hide", key=f"hide_copy_{entry_id}"):
+                        del st.session_state[f"copied_url_{entry_id}"]
+                        st.rerun()
+
+                # Show export content if requested
+                if st.session_state.get(f"export_{entry_id}"):
+                    st.text_area(
+                        "📋 Copy this to your notetaker:",
+                        value=st.session_state[f"export_{entry_id}"],
+                        height=200,
+                        key=f"export_text_{entry_id}"
+                    )
+                    if st.button("Hide Export", key=f"hide_export_{entry_id}"):
+                        del st.session_state[f"export_{entry_id}"]
+                        st.rerun()
 
                 st.markdown("---")
     else:
@@ -317,6 +503,50 @@ if 'trigger_reprocess' in st.session_state and st.session_state.trigger_reproces
 # Shared controls (only show when not in history tab or when auto-processing)
 st.markdown("---")
 words = st.slider("📊 Summary length (words)", 50, 3000, DEFAULT_WORDS, step=50)
+
+# === Advanced Options Expander ===
+with st.expander("⚙️ Advanced Options", expanded=False):
+    adv_col1, adv_col2 = st.columns(2)
+
+    with adv_col1:
+        focus_area = st.selectbox(
+            "🎯 Focus Area",
+            options=list(FOCUS_AREAS.keys()),
+            index=0,
+            help="Adjust what aspects the summary emphasizes"
+        )
+        st.caption(f"_{FOCUS_AREAS[focus_area]}_")
+
+    with adv_col2:
+        tone = st.selectbox(
+            "✍️ Tone",
+            options=list(TONE_OPTIONS.keys()),
+            index=0,
+            help="Adjust the writing style of the summary"
+        )
+        st.caption(f"_{TONE_OPTIONS[tone]}_")
+
+    # Token estimate display
+    st.markdown("---")
+    if input_type and content:
+        estimated_tokens = estimate_processing_tokens(input_type, words)
+        usage = load_token_usage()
+        remaining = GROQ_DAILY_TOKEN_LIMITS.get("llama-3.3-70b-versatile", 100_000) - usage.get('tokens_used', 0)
+
+        token_col1, token_col2 = st.columns(2)
+        with token_col1:
+            st.metric("Estimated Tokens", f"~{estimated_tokens:,}")
+        with token_col2:
+            if estimated_tokens > remaining:
+                st.metric("Tokens Remaining", f"{remaining:,}", delta="May use fallback model", delta_color="inverse")
+            else:
+                st.metric("Tokens Remaining", f"{remaining:,}")
+    else:
+        st.caption("💡 Enter content above to see token estimates")
+
+# Store advanced options in session state for processing
+st.session_state.focus_area = focus_area if 'focus_area' in dir() else "General"
+st.session_state.tone = tone if 'tone' in dir() else "Professional"
 
 # Add session state for tracking if processing is complete
 if 'processing_complete' not in st.session_state:
@@ -526,6 +756,10 @@ def process_url(url, words):
         if res.returncode == 0 and m:
             path = m.group(1).strip()
             st.success(f"✅ Summary generated successfully")
+
+            # Track token usage (estimate based on output + typical input)
+            estimated_tokens = estimate_processing_tokens('url', words)
+            save_token_usage(estimated_tokens)
             
             if os.path.exists(path):
                 try:
@@ -890,7 +1124,11 @@ except Exception as e:
             progress_bar.progress(1.0)
             progress_text.empty()
             progress_bar.empty()
-            
+
+            # Track token usage (estimate based on file processing)
+            estimated_tokens = estimate_processing_tokens('file', words)
+            save_token_usage(estimated_tokens)
+
             # Check if file was saved
             saved_match = re.search(r"SAVED_TO:(.+)", result.stdout)
             if saved_match:
@@ -1068,6 +1306,10 @@ except Exception as e:
         status_placeholder.empty()
         
         if result.returncode == 0:
+            # Track token usage (estimate based on text processing)
+            estimated_tokens = estimate_processing_tokens('text', words)
+            save_token_usage(estimated_tokens)
+
             # Check if file was saved
             saved_match = re.search(r"SAVED_TO:(.+)", result.stdout)
             if saved_match:
