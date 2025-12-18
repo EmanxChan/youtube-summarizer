@@ -379,9 +379,9 @@ def fetch_article_content(url, max_retries=3):
     
     # Join with paragraph separators
     full_text = '\n\n'.join(text_parts)
-    
-    # Normalize whitespace
-    full_text = re.sub(r'\s+', ' ', full_text)  # Collapse spaces
+
+    # Normalize whitespace (preserve paragraph breaks)
+    full_text = re.sub(r'[^\S\n]+', ' ', full_text)  # Collapse spaces but NOT newlines
     full_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', full_text)  # Max 2 newlines
     full_text = full_text.strip()
     
@@ -3460,7 +3460,10 @@ def format_markdown_document(title, source_url, summary, takeaways, full_text,
 
     # Header with better formatting
     doc.append(f"# {title}\n")
-    doc.append(f"**Source:** [{source_url}]({source_url})")
+    if source_url:
+        doc.append(f"**Source:** [{source_url}]({source_url})")
+    else:
+        doc.append(f"**Source:** Search result")
 
     if source_id:
         doc.append(f"**Video ID:** `{source_id}`")
@@ -4001,13 +4004,13 @@ def handle_youtube_command(args):
             output_dir = base_output_dir / "youtube"
         elif content_type == ContentType.ARTICLE:
             output_dir = base_output_dir / "article"
-        elif content_type == ContentType.PODCAST or content_type == ContentType.PODCAST_SEARCH:
+        elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"
         else:
             output_dir = base_output_dir / "youtube"  # Default fallback
-        
+
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         md_file = get_unique_filepath(output_dir, slug, "md")
         
         with open(md_file, 'w', encoding='utf-8') as f:
@@ -4021,11 +4024,11 @@ def handle_youtube_command(args):
             output_dir = base_output_dir / "youtube"
         elif content_type == ContentType.ARTICLE:
             output_dir = base_output_dir / "article"
-        elif content_type == ContentType.PODCAST or content_type == ContentType.PODCAST_SEARCH:
+        elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"
         else:
             output_dir = base_output_dir / "youtube"  # Default fallback
-        
+
         output_dir.mkdir(parents=True, exist_ok=True)
         
         content_file = get_unique_filepath(output_dir, slug, f"{content_label.lower()}.txt")
