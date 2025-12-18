@@ -157,39 +157,6 @@ with col2:
 # Apply dark mode theme
 apply_dark_mode()
 
-# === Token Usage Dashboard (Sidebar) ===
-with st.sidebar:
-    st.markdown("## 📊 Token Usage")
-
-    usage = load_token_usage()
-    tokens_used = usage.get('tokens_used', 0)
-    requests_today = usage.get('requests', 0)
-
-    # Default limit for primary model
-    daily_limit = GROQ_DAILY_TOKEN_LIMITS.get("llama-3.3-70b-versatile", 100_000)
-    usage_percent = min((tokens_used / daily_limit) * 100, 100)
-
-    # Color based on usage
-    if usage_percent < 50:
-        bar_color = "green"
-        status_emoji = "✅"
-    elif usage_percent < 80:
-        bar_color = "orange"
-        status_emoji = "⚠️"
-    else:
-        bar_color = "red"
-        status_emoji = "🔴"
-
-    st.progress(usage_percent / 100)
-    st.caption(f"{status_emoji} **{tokens_used:,}** / {daily_limit:,} tokens today")
-    st.caption(f"📝 {requests_today} requests made")
-
-    if usage_percent >= 80:
-        st.warning("⚠️ Approaching daily limit. May fallback to smaller models.")
-
-    st.markdown("---")
-    st.caption("💡 Groq free tier resets daily at midnight UTC")
-
 # Add info box
 st.info("✨ **Supports YouTube videos, podcasts, articles, files, and text** • AI-powered summaries with key takeaways")
 
@@ -504,6 +471,35 @@ if 'trigger_reprocess' in st.session_state and st.session_state.trigger_reproces
 st.markdown("---")
 words = st.slider("📊 Summary length (words)", 50, 3000, DEFAULT_WORDS, step=50)
 
+# === Token Usage Status Bar ===
+usage = load_token_usage()
+tokens_used = usage.get('tokens_used', 0)
+requests_today = usage.get('requests', 0)
+daily_limit = GROQ_DAILY_TOKEN_LIMITS.get("llama-3.3-70b-versatile", 100_000)
+tokens_remaining = max(0, daily_limit - tokens_used)
+usage_percent = min((tokens_used / daily_limit) * 100, 100)
+
+# Status indicator based on usage
+if usage_percent < 50:
+    status_color = "🟢"
+elif usage_percent < 80:
+    status_color = "🟡"
+else:
+    status_color = "🔴"
+
+# Compact status bar with progress
+token_cols = st.columns([1, 3, 1])
+with token_cols[0]:
+    st.caption(f"{status_color} **{usage_percent:.0f}%** used")
+with token_cols[1]:
+    st.progress(usage_percent / 100)
+with token_cols[2]:
+    st.caption(f"**{tokens_remaining:,}** left")
+
+# Show warning if approaching limit
+if usage_percent >= 80:
+    st.warning("⚠️ Approaching daily limit. May fallback to smaller models.", icon="⚠️")
+
 # === Advanced Options Expander ===
 with st.expander("⚙️ Advanced Options", expanded=False):
     adv_col1, adv_col2 = st.columns(2)
@@ -526,23 +522,17 @@ with st.expander("⚙️ Advanced Options", expanded=False):
         )
         st.caption(f"_{TONE_OPTIONS[tone]}_")
 
-    # Token estimate display
+    # Detailed token info
     st.markdown("---")
-    if input_type and content:
-        estimated_tokens = estimate_processing_tokens(input_type, words)
-        usage = load_token_usage()
-        remaining = GROQ_DAILY_TOKEN_LIMITS.get("llama-3.3-70b-versatile", 100_000) - usage.get('tokens_used', 0)
-
-        token_col1, token_col2 = st.columns(2)
-        with token_col1:
-            st.metric("Estimated Tokens", f"~{estimated_tokens:,}")
-        with token_col2:
-            if estimated_tokens > remaining:
-                st.metric("Tokens Remaining", f"{remaining:,}", delta="May use fallback model", delta_color="inverse")
-            else:
-                st.metric("Tokens Remaining", f"{remaining:,}")
-    else:
-        st.caption("💡 Enter content above to see token estimates")
+    st.caption("**Token Details**")
+    detail_cols = st.columns(3)
+    with detail_cols[0]:
+        st.metric("Used Today", f"{tokens_used:,}")
+    with detail_cols[1]:
+        st.metric("Remaining", f"{tokens_remaining:,}")
+    with detail_cols[2]:
+        st.metric("Requests", f"{requests_today}")
+    st.caption("💡 Groq free tier resets daily at midnight UTC")
 
 # Store advanced options in session state for processing
 st.session_state.focus_area = focus_area if 'focus_area' in dir() else "General"
