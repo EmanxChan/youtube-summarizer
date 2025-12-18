@@ -9,6 +9,9 @@ beautifulsoup4>=4.12.0
 lxml>=4.9.0
 feedparser>=6.0.10
 
+# Article Extraction (Cloudflare bypass)
+cloudscraper>=1.2.71
+
 # Audio/Video Transcription
 faster-whisper>=0.10.0
 

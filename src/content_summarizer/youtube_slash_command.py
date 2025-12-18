@@ -209,88 +209,127 @@ def detect_content_type(query):
     return (ContentType.VIDEO, query)
 
 
-def fetch_article_content(url):
+def fetch_article_content(url, max_retries=3):
     """
     Fetch and parse article content from URL.
-    
+
     Args:
         url: Article URL to fetch
-        
+        max_retries: Maximum number of retry attempts (default 3)
+
     Returns:
         tuple: (title, cleaned_text)
-        
+
     Raises:
         ValueError: If content is too short or cannot be extracted
         ConnectionError: If URL cannot be reached
     """
+    import time
+
     if not ARTICLE_SUPPORT:
         raise ImportError(
             "Article support not available. Install dependencies: "
             "pip install beautifulsoup4 lxml"
         )
-    
+
+    response = None
+    use_cloudscraper = False
+    last_error = None
+
+    # Try cloudscraper first (best for Cloudflare-protected sites)
     try:
-        # Try cloudscraper first for Cloudflare-protected sites (optional dependency)
+        import cloudscraper
+        use_cloudscraper = True
+    except ImportError:
+        pass
+
+    # Retry logic with exponential backoff
+    for attempt in range(max_retries):
         try:
-            import cloudscraper
-            scraper = cloudscraper.create_scraper()
-            response = scraper.get(url, timeout=15, allow_redirects=True)
-            response.raise_for_status()
-        except (ImportError, Exception):
-            # Fallback to regular requests with enhanced headers
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                             'AppleWebKit/537.36 (KHTML, like Gecko) '
-                             'Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0',
-            }
-            
-            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-            response.raise_for_status()
-        
-    except requests.exceptions.Timeout:
-        raise ConnectionError(f"Request timed out after 15 seconds: {url}")
-    except requests.exceptions.ConnectionError:
-        raise ConnectionError(f"Cannot reach URL: {url}")
-    except requests.exceptions.HTTPError as e:
-        # If we get 403, try newspaper3k as fallback (better at bypassing bot detection)
-        if response.status_code == 403:
-            print("  📰 Site blocked direct access, trying newspaper3k parser...")
-            try:
-                from newspaper import Article
-                article = Article(url)
-                article.download()
-                article.parse()
-                
-                if article.text and len(article.text) >= 200:
-                    title = article.title or "Article"
-                    return (title, article.text)
-                else:
-                    raise ValueError("Article content too short or empty")
-            except ImportError:
+            if use_cloudscraper:
+                scraper = cloudscraper.create_scraper()
+                response = scraper.get(url, timeout=20, allow_redirects=True)
+                response.raise_for_status()
+            else:
+                # Fallback to regular requests with enhanced headers
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                                 'AppleWebKit/537.36 (KHTML, like Gecko) '
+                                 'Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0',
+                }
+
+                response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+                response.raise_for_status()
+
+            # Success - break out of retry loop
+            break
+
+        except Exception as e:
+            last_error = e
+            status_code = getattr(response, 'status_code', None) if response else None
+
+            # Don't retry on permanent errors (404, etc.)
+            if status_code in [404, 410]:
+                break
+
+            # Retry on temporary errors (403, 429, 500, 502, 503)
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) + 0.5  # 1.5s, 2.5s, 4.5s
+                time.sleep(wait_time)
+                response = None  # Reset for next attempt
+                continue
+
+    # If we exhausted retries, handle the last error
+    if last_error and (response is None or response.status_code >= 400):
+        e = last_error
+        # Handle various exception types
+        error_name = type(e).__name__
+
+        # Check for timeout
+        if 'timeout' in error_name.lower() or 'timeout' in str(e).lower():
+            raise ConnectionError(f"Request timed out: {url}")
+
+        # Check for connection errors
+        if 'connection' in error_name.lower():
+            raise ConnectionError(f"Cannot reach URL: {url}")
+
+        # Check for HTTP errors (including from cloudscraper)
+        status_code = getattr(response, 'status_code', None) if response else None
+
+        if 'httperror' in error_name.lower() or (response and status_code):
+            if status_code == 403:
                 raise ConnectionError(
-                    f"Failed to fetch (status 403): {url}\n"
-                    "  Tip: Install newspaper3k for better article extraction: pip install newspaper3k"
+                    f"⚠️ Access denied (403 Forbidden): {url}\n\n"
+                    "This site has bot protection that blocks automated scrapers.\n\n"
+                    "💡 Workarounds:\n"
+                    "   1. Copy the article text and use the 'Paste Text' tab instead\n"
+                    "   2. Try a reader mode URL if the site offers one\n"
+                    "   3. Use a browser extension to extract clean article text"
                 )
-            except Exception as e2:
-                raise ConnectionError(
-                    f"Failed to fetch (status 403): {url}\n"
-                    f"  Newspaper3k also failed: {e2}\n"
-                    "  This site may require browser access or have strict bot protection."
-                )
-        raise ConnectionError(f"Failed to fetch (status {response.status_code}): {url}")
-    except Exception as e:
-        raise ConnectionError(f"Error fetching URL: {e}")
+            if status_code:
+                raise ConnectionError(f"Failed to fetch (status {status_code}): {url}")
+
+        # Cloudscraper-specific errors
+        if 'challenge' in error_name.lower() or 'cloudflare' in str(e).lower():
+            raise ConnectionError(
+                f"⚠️ Cloudflare challenge failed: {url}\n\n"
+                "This site uses advanced bot protection.\n\n"
+                "💡 Try copying the article text and using the 'Paste Text' tab instead."
+            )
+
+        # Generic error
+        raise ConnectionError(f"Error fetching URL ({error_name}): {e}")
     
     # Parse HTML
     try:
@@ -340,9 +379,9 @@ def fetch_article_content(url):
     
     # Join with paragraph separators
     full_text = '\n\n'.join(text_parts)
-    
-    # Normalize whitespace
-    full_text = re.sub(r'\s+', ' ', full_text)  # Collapse spaces
+
+    # Normalize whitespace (preserve paragraph breaks)
+    full_text = re.sub(r'[^\S\n]+', ' ', full_text)  # Collapse spaces but NOT newlines
     full_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', full_text)  # Max 2 newlines
     full_text = full_text.strip()
     
@@ -3421,7 +3460,10 @@ def format_markdown_document(title, source_url, summary, takeaways, full_text,
 
     # Header with better formatting
     doc.append(f"# {title}\n")
-    doc.append(f"**Source:** [{source_url}]({source_url})")
+    if source_url:
+        doc.append(f"**Source:** [{source_url}]({source_url})")
+    else:
+        doc.append(f"**Source:** Search result")
 
     if source_id:
         doc.append(f"**Video ID:** `{source_id}`")
@@ -3962,13 +4004,13 @@ def handle_youtube_command(args):
             output_dir = base_output_dir / "youtube"
         elif content_type == ContentType.ARTICLE:
             output_dir = base_output_dir / "article"
-        elif content_type == ContentType.PODCAST or content_type == ContentType.PODCAST_SEARCH:
+        elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"
         else:
             output_dir = base_output_dir / "youtube"  # Default fallback
-        
+
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         md_file = get_unique_filepath(output_dir, slug, "md")
         
         with open(md_file, 'w', encoding='utf-8') as f:
@@ -3982,11 +4024,11 @@ def handle_youtube_command(args):
             output_dir = base_output_dir / "youtube"
         elif content_type == ContentType.ARTICLE:
             output_dir = base_output_dir / "article"
-        elif content_type == ContentType.PODCAST or content_type == ContentType.PODCAST_SEARCH:
+        elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"
         else:
             output_dir = base_output_dir / "youtube"  # Default fallback
-        
+
         output_dir.mkdir(parents=True, exist_ok=True)
         
         content_file = get_unique_filepath(output_dir, slug, f"{content_label.lower()}.txt")
