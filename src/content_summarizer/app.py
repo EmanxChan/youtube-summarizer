@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import streamlit as st
+import streamlit.components.v1 as components
 import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
@@ -16,6 +17,50 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from content_summarizer.style import apply_dark_mode
 from content_summarizer.history_manager import get_history_manager, record_history
+
+
+# ============================================================================
+# Clipboard Copy Helper
+# ============================================================================
+
+def copy_to_clipboard(text: str, key: str):
+    """
+    Copy text to clipboard using JavaScript injection.
+
+    Args:
+        text: Text to copy
+        key: Unique key for the component
+    """
+    # Escape text for JavaScript
+    escaped_text = text.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n')
+
+    # JavaScript to copy to clipboard and show feedback
+    js_code = f"""
+    <script>
+    async function copyToClipboard() {{
+        try {{
+            await navigator.clipboard.writeText('{escaped_text}');
+            // Show brief success feedback
+            const el = document.getElementById('copy-feedback-{key}');
+            if (el) {{
+                el.style.display = 'block';
+                setTimeout(() => {{ el.style.display = 'none'; }}, 2000);
+            }}
+        }} catch (err) {{
+            // Fallback for older browsers
+            const textArea = document.createElement('textarea');
+            textArea.value = '{escaped_text}';
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+        }}
+    }}
+    copyToClipboard();
+    </script>
+    <div id="copy-feedback-{key}" style="display:none; color: #28a745; font-size: 12px;">✓ Copied!</div>
+    """
+    components.html(js_code, height=25)
 
 
 # ============================================================================
@@ -395,18 +440,37 @@ with tab_history:
                     btn_col1, btn_col2, btn_col3 = st.columns(3)
 
                     with btn_col1:
-                        # Copy URL button
+                        # Copy URL button - triggers clipboard copy
                         if entry_url and not entry_url.startswith(('text://', 'file://')):
-                            # Use a text input trick for copy functionality
-                            if st.button("📋", key=f"copy_{entry_id}", help="Copy URL"):
-                                st.session_state[f"copied_url_{entry_id}"] = entry_url
-                                st.toast(f"URL copied!", icon="✅")
+                            if st.button("📋", key=f"copy_{entry_id}", help="Copy URL to clipboard"):
+                                st.session_state[f"do_copy_{entry_id}"] = True
 
                     with btn_col2:
                         # Export to notetaker
                         if st.button("📤", key=f"export_{entry_id}", help="Export for Notetaker"):
-                            # Generate Notion/Obsidian formatted export
-                            export_text = f"""# {entry_title}
+                            st.session_state[f"show_export_{entry_id}"] = True
+
+                    with btn_col3:
+                        # Delete button
+                        if st.button("🗑️", key=f"delete_{entry_id}", help="Delete from history"):
+                            st.session_state.delete_entry_id = entry_id
+                            st.rerun()
+
+                    # Re-process button (full width below)
+                    if entry_url and not entry_url.startswith(('text://', 'file://')):
+                        if st.button("🔄 Re-process", key=f"reprocess_{entry_id}", use_container_width=True):
+                            st.session_state.trigger_reprocess = entry_url
+                            st.rerun()
+
+                # Execute clipboard copy if requested
+                if st.session_state.get(f"do_copy_{entry_id}"):
+                    copy_to_clipboard(entry_url, entry_id)
+                    st.session_state[f"do_copy_{entry_id}"] = False
+                    st.success(f"✓ URL copied to clipboard!", icon="📋")
+
+                # Show export content if requested
+                if st.session_state.get(f"show_export_{entry_id}"):
+                    export_text = f"""# {entry_title}
 
 **Source:** {entry_url}
 **Type:** {entry.get('content_type', 'Unknown').title()}
@@ -421,38 +485,14 @@ with tab_history:
 
 > Exported from Content Summarizer
 """
-                            st.session_state[f"export_{entry_id}"] = export_text
-
-                    with btn_col3:
-                        # Delete button
-                        if st.button("🗑️", key=f"delete_{entry_id}", help="Delete from history"):
-                            st.session_state.delete_entry_id = entry_id
-                            st.rerun()
-
-                    # Re-process button (full width below)
-                    if entry_url and not entry_url.startswith(('text://', 'file://')):
-                        if st.button("🔄 Re-process", key=f"reprocess_{entry_id}", use_container_width=True):
-                            st.session_state.trigger_reprocess = entry_url
-                            st.rerun()
-
-                # Show copied URL if just copied
-                if st.session_state.get(f"copied_url_{entry_id}"):
-                    st.code(st.session_state[f"copied_url_{entry_id}"], language=None)
-                    st.caption("👆 Select and copy the URL above")
-                    if st.button("Hide", key=f"hide_copy_{entry_id}"):
-                        del st.session_state[f"copied_url_{entry_id}"]
-                        st.rerun()
-
-                # Show export content if requested
-                if st.session_state.get(f"export_{entry_id}"):
                     st.text_area(
                         "📋 Copy this to your notetaker:",
-                        value=st.session_state[f"export_{entry_id}"],
+                        value=export_text,
                         height=200,
                         key=f"export_text_{entry_id}"
                     )
                     if st.button("Hide Export", key=f"hide_export_{entry_id}"):
-                        del st.session_state[f"export_{entry_id}"]
+                        st.session_state[f"show_export_{entry_id}"] = False
                         st.rerun()
 
                 st.markdown("---")
