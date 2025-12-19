@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from content_summarizer.style import apply_dark_mode
 from content_summarizer.history_manager import get_history_manager, record_history
+from content_summarizer.export_formats import EXPORT_FORMATS, convert_for_export
 
 
 # ============================================================================
@@ -852,18 +853,45 @@ def display_url_results():
     if 'last_result' in st.session_state and st.session_state.last_result:
         content = st.session_state.last_result['content']
         filename = st.session_state.last_result['filename']
-        
-        # Download button (blue) - primary style
-        st.download_button(
-            "📥 Download Markdown",
-            content,
-            file_name=filename,
-            mime="text/markdown",
-            use_container_width=True,
-            type="primary",  # Blue button
-            key="download_btn"
-        )
-        
+        url = st.session_state.last_result.get('url', '')
+
+        # Extract title from content for metadata
+        title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+        title = title_match.group(1) if title_match else filename.replace('.md', '')
+
+        # Export format selector and download button
+        dl_col1, dl_col2 = st.columns([2, 3])
+
+        with dl_col1:
+            export_format = st.selectbox(
+                "Format",
+                options=list(EXPORT_FORMATS.keys()),
+                format_func=lambda x: EXPORT_FORMATS[x]['label'],
+                key="export_format_url",
+                label_visibility="collapsed"
+            )
+
+        with dl_col2:
+            # Convert content to selected format
+            try:
+                metadata = {'title': title, 'url': url, 'filename': filename}
+                converted, mime, ext = convert_for_export(content, export_format, metadata)
+
+                # Handle bytes vs string for download
+                download_filename = filename.rsplit('.', 1)[0] + ext
+
+                st.download_button(
+                    f"📥 Download {EXPORT_FORMATS[export_format]['label'].split()[0]}",
+                    converted,
+                    file_name=download_filename,
+                    mime=mime,
+                    use_container_width=True,
+                    type="primary",
+                    key="download_btn_url"
+                )
+            except Exception as e:
+                st.error(f"Export error: {e}")
+
         # Green Process Another button below download
         st.markdown("""
         <style>
@@ -885,7 +913,7 @@ def display_url_results():
             st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
             st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
             st.rerun()
-        
+
         st.markdown("---")
         st.markdown(content)
 
@@ -1431,18 +1459,42 @@ if 'last_result' in st.session_state and st.session_state.last_result:
 if 'file_result' in st.session_state and st.session_state.file_result:
     content = st.session_state.file_result['content']
     filename = st.session_state.file_result['filename']
-    
-    # Blue download button
-    st.download_button(
-        "📥 Download Markdown",
-        content,
-        file_name=f"{filename.rsplit('.', 1)[0]}_summary.md",
-        mime="text/markdown",
-        use_container_width=True,
-        type="primary",
-        key="download_file_btn"
-    )
-    
+
+    # Extract title from content
+    title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+    title = title_match.group(1) if title_match else filename.rsplit('.', 1)[0]
+    base_filename = f"{filename.rsplit('.', 1)[0]}_summary"
+
+    # Export format selector and download button
+    dl_col1, dl_col2 = st.columns([2, 3])
+
+    with dl_col1:
+        export_format_file = st.selectbox(
+            "Format",
+            options=list(EXPORT_FORMATS.keys()),
+            format_func=lambda x: EXPORT_FORMATS[x]['label'],
+            key="export_format_file",
+            label_visibility="collapsed"
+        )
+
+    with dl_col2:
+        try:
+            metadata = {'title': title, 'filename': filename}
+            converted, mime, ext = convert_for_export(content, export_format_file, metadata)
+            download_filename = base_filename + ext
+
+            st.download_button(
+                f"📥 Download {EXPORT_FORMATS[export_format_file]['label'].split()[0]}",
+                converted,
+                file_name=download_filename,
+                mime=mime,
+                use_container_width=True,
+                type="primary",
+                key="download_file_btn"
+            )
+        except Exception as e:
+            st.error(f"Export error: {e}")
+
     # Green Process Another button
     st.markdown("""
     <style>
@@ -1464,7 +1516,7 @@ if 'file_result' in st.session_state and st.session_state.file_result:
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
-    
+
     st.markdown("---")
     st.markdown(content)
 
@@ -1472,18 +1524,42 @@ if 'file_result' in st.session_state and st.session_state.file_result:
 if 'text_result' in st.session_state and st.session_state.text_result:
     content = st.session_state.text_result['content']
     filename = st.session_state.text_result['filename']
-    
-    # Blue download button
-    st.download_button(
-        "📥 Download Markdown",
-        content,
-        file_name=filename,
-        mime="text/markdown",
-        use_container_width=True,
-        type="primary",
-        key="download_text_btn"
-    )
-    
+
+    # Extract title from content
+    title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+    title = title_match.group(1) if title_match else filename.replace('.md', '')
+    base_filename = filename.rsplit('.', 1)[0]
+
+    # Export format selector and download button
+    dl_col1, dl_col2 = st.columns([2, 3])
+
+    with dl_col1:
+        export_format_text = st.selectbox(
+            "Format",
+            options=list(EXPORT_FORMATS.keys()),
+            format_func=lambda x: EXPORT_FORMATS[x]['label'],
+            key="export_format_text",
+            label_visibility="collapsed"
+        )
+
+    with dl_col2:
+        try:
+            metadata = {'title': title, 'filename': filename}
+            converted, mime, ext = convert_for_export(content, export_format_text, metadata)
+            download_filename = base_filename + ext
+
+            st.download_button(
+                f"📥 Download {EXPORT_FORMATS[export_format_text]['label'].split()[0]}",
+                converted,
+                file_name=download_filename,
+                mime=mime,
+                use_container_width=True,
+                type="primary",
+                key="download_text_btn"
+            )
+        except Exception as e:
+            st.error(f"Export error: {e}")
+
     # Green Process Another button
     st.markdown("""
     <style>
@@ -1505,6 +1581,6 @@ if 'text_result' in st.session_state and st.session_state.text_result:
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
-    
+
     st.markdown("---")
     st.markdown(content)
