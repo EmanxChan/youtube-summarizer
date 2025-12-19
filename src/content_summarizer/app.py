@@ -412,89 +412,60 @@ with tab_history:
             entry_id = entry.get('id', '')
             entry_url = entry.get('url', '')
             entry_title = formatted.get('title', 'Untitled')
+            content_type = entry.get('content_type', '')
+            source_label = entry.get('source_label', '')
+            duration_str = formatted.get('duration_str', '')
 
-            # History entry card
+            # History entry card - compact layout
             with st.container():
-                col_icon, col_info, col_actions = st.columns([1, 5, 3])
-
-                with col_icon:
-                    st.markdown(f"## {formatted['icon']}")
+                # Main row: icon + info + actions
+                col_info, col_actions = st.columns([4, 1])
 
                 with col_info:
+                    # Title with small inline icon
+                    icon = formatted['icon']
                     title = entry_title
-                    if len(title) > 50:
-                        title = title[:50] + "..."
-                    st.markdown(f"**{title}**")
+                    if len(title) > 60:
+                        title = title[:60] + "..."
+                    st.markdown(f"{icon} **{title}**")
 
-                    # Show URL domain and time
+                    # Details row: source, duration, domain, time
+                    details = []
+                    if source_label:
+                        details.append(source_label)
+                    if duration_str:
+                        details.append(f"⏱️ {duration_str}")
                     domain = formatted.get('domain', '')
+                    if domain:
+                        details.append(domain)
                     time_ago = formatted.get('time_ago', '')
-                    st.caption(f"{domain} • {time_ago}")
+                    if time_ago:
+                        details.append(time_ago)
 
-                    # Show summary preview if available
+                    st.caption(" • ".join(details))
+
+                    # Summary preview
                     preview = entry.get('summary_preview', '')
                     if preview:
-                        st.caption(f"_{preview[:80]}..._" if len(preview) > 80 else f"_{preview}_")
+                        preview_text = preview[:100] + "..." if len(preview) > 100 else preview
+                        st.caption(f"_{preview_text}_")
 
                 with col_actions:
-                    # Quick action buttons in a row
-                    btn_col1, btn_col2, btn_col3 = st.columns(3)
-
-                    with btn_col1:
-                        # Copy URL button - triggers clipboard copy
-                        if entry_url and not entry_url.startswith(('text://', 'file://')):
-                            if st.button("📋", key=f"copy_{entry_id}", help="Copy URL to clipboard"):
-                                st.session_state[f"do_copy_{entry_id}"] = True
-
-                    with btn_col2:
-                        # Export to notetaker
-                        if st.button("📤", key=f"export_{entry_id}", help="Export for Notetaker"):
-                            st.session_state[f"show_export_{entry_id}"] = True
-
-                    with btn_col3:
-                        # Delete button
-                        if st.button("🗑️", key=f"delete_{entry_id}", help="Delete from history"):
-                            st.session_state.delete_entry_id = entry_id
-                            st.rerun()
-
-                    # Re-process button (full width below)
+                    # Action buttons - vertical stack
                     if entry_url and not entry_url.startswith(('text://', 'file://')):
-                        if st.button("🔄 Re-process", key=f"reprocess_{entry_id}", use_container_width=True):
+                        if st.button("🔄", key=f"reprocess_{entry_id}", help="Re-process this content"):
                             st.session_state.trigger_reprocess = entry_url
                             st.rerun()
 
-                # Execute clipboard copy if requested
-                if st.session_state.get(f"do_copy_{entry_id}"):
-                    copy_to_clipboard(entry_url, entry_id)
-                    st.session_state[f"do_copy_{entry_id}"] = False
-                    st.success(f"✓ URL copied to clipboard!", icon="📋")
-
-                # Show export content if requested
-                if st.session_state.get(f"show_export_{entry_id}"):
-                    export_text = f"""# {entry_title}
-
-**Source:** {entry_url}
-**Type:** {entry.get('content_type', 'Unknown').title()}
-**Date:** {entry.get('created_at', '')[:10]}
-
----
-
-## Summary Preview
-{entry.get('summary_preview', 'No preview available')}
-
----
-
-> Exported from Content Summarizer
-"""
-                    st.text_area(
-                        "📋 Copy this to your notetaker:",
-                        value=export_text,
-                        height=200,
-                        key=f"export_text_{entry_id}"
-                    )
-                    if st.button("Hide Export", key=f"hide_export_{entry_id}"):
-                        st.session_state[f"show_export_{entry_id}"] = False
+                    if st.button("🗑️", key=f"delete_{entry_id}", help="Delete from history"):
+                        st.session_state.delete_entry_id = entry_id
                         st.rerun()
+
+                # Copy URL section (expandable)
+                if entry_url and not entry_url.startswith(('text://', 'file://')):
+                    with st.expander("📋 Copy URL", expanded=False):
+                        st.code(entry_url, language=None)
+                        st.caption("Select the URL above and copy (Ctrl+C / Cmd+C)")
 
                 st.markdown("---")
     else:
