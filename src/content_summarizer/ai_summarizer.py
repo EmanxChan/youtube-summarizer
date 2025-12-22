@@ -519,56 +519,160 @@ Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight 
                         transcript[len(transcript)//2 - third//2:len(transcript)//2 + third//2] + \
                         " [...] " + transcript[-third:]
 
-        # Calculate words per paragraph for guidance
-        words_per_paragraph = word_count // 4
-
         # Build focus area instruction
         focus_instruction = ""
         if focus_area and focus_area != "General":
             focus_map = {
-                "Technical": "Emphasize technical details, methodologies, tools, and implementation specifics throughout the summary.",
-                "Business": "Focus on business implications, ROI, market insights, strategic value, and practical business applications.",
-                "Learning": "Highlight educational value, key concepts, learning outcomes, and actionable knowledge.",
-                "Quick Overview": "Be direct and concise. Hit only the essential points without extensive elaboration.",
+                "Technical": "Emphasize technical details, methodologies, tools, and implementation specifics.",
+                "Business": "Focus on business implications, ROI, market insights, and strategic value.",
+                "Learning": "Highlight educational value, key concepts, and actionable knowledge.",
+                "Quick Overview": "Be extremely concise. Only the most essential points.",
             }
-            focus_instruction = f"\n\nFOCUS AREA: {focus_map.get(focus_area, '')}"
+            focus_instruction = focus_map.get(focus_area, '')
 
-        # Build tone instruction
-        tone_instruction = ""
-        if tone and tone != "Professional":
-            tone_map = {
-                "Casual": "Write in a conversational, approachable tone. Use everyday language and avoid jargon.",
-                "Academic": "Use formal, precise academic language with attention to nuance and intellectual rigor.",
-                "Bullet Points": "Structure the summary using bullet points and short paragraphs. Prioritize scannability.",
-            }
-            tone_instruction = f"\n\nTONE: {tone_map.get(tone, '')}"
+        # Use different prompt templates based on tone
+        if tone == "Bullet Points":
+            # Bullet point format - completely different structure
+            prompt = f"""You are an expert at creating scannable, bullet-pointed summaries.
 
-        prompt = f"""You are an expert at creating executive summaries for educational and technical content.{focus_instruction}{tone_instruction}
+Title: {video_title}
+Content: {transcript}
+
+Create a bullet-pointed summary that is easy to scan and digest quickly.
+{f'Focus: {focus_instruction}' if focus_instruction else ''}
+
+FORMAT REQUIREMENTS:
+Use this exact structure with bullet points:
+
+## TL;DR
+• One sentence capturing the core message
+
+## Key Points
+• Point 1: [specific insight or concept]
+• Point 2: [specific insight or concept]
+• Point 3: [specific insight or concept]
+• Point 4: [specific insight or concept]
+• Point 5: [specific insight or concept]
+
+## Main Takeaways
+• [Actionable takeaway 1]
+• [Actionable takeaway 2]
+• [Actionable takeaway 3]
+
+## Who Should Read This
+• [Target audience 1]
+• [Target audience 2]
+
+CRITICAL RULES:
+- Use bullet points (•) for ALL content
+- Keep each bullet to 1-2 sentences max
+- No long paragraphs - everything should be scannable
+- Be specific and concrete, not vague
+- Total length: approximately {word_count} words
+
+Return ONLY the formatted summary with headers and bullet points."""
+
+        elif tone == "Casual":
+            # Casual conversational tone
+            words_per_section = word_count // 3
+            prompt = f"""You are a friendly expert explaining content to a friend over coffee.
+
+Title: {video_title}
+Content: {transcript}
+
+Write a casual, conversational summary as if you're telling a friend about this.
+{f'Focus: {focus_instruction}' if focus_instruction else ''}
+
+STYLE GUIDELINES:
+- Use "you" and "we" - make it personal
+- Use everyday language, no jargon
+- It's okay to use contractions (don't, isn't, etc.)
+- Add personality - be enthusiastic where appropriate
+- Use short sentences and simple words
+
+STRUCTURE (~{word_count} words total):
+1. Hook them in (~{words_per_section} words): Start with why this matters to them personally
+2. The good stuff (~{words_per_section} words): Share the most interesting insights conversationally
+3. What to do with it (~{words_per_section} words): Practical next steps in friendly language
+
+Return ONLY the summary text."""
+
+        elif tone == "Academic":
+            # Formal academic tone
+            words_per_section = word_count // 4
+            prompt = f"""You are an academic researcher writing a formal summary.
+
+Title: {video_title}
+Content: {transcript}
+
+Write a formal academic summary with precise language and intellectual rigor.
+{f'Focus: {focus_instruction}' if focus_instruction else ''}
+
+STYLE GUIDELINES:
+- Use formal, precise language
+- Employ academic vocabulary appropriately
+- Maintain objectivity and analytical distance
+- Reference methodologies and frameworks where relevant
+- Use hedging language where appropriate ("suggests", "indicates", "appears to")
+
+STRUCTURE (~{word_count} words total):
+1. Abstract (~{words_per_section} words): Concise overview of the content's thesis and significance
+2. Key Findings (~{words_per_section} words): Principal arguments and evidence presented
+3. Analysis (~{words_per_section} words): Critical examination of the content's contributions
+4. Implications (~{words_per_section} words): Broader significance and areas for further inquiry
+
+Return ONLY the summary text."""
+
+        else:
+            # Default Professional tone with paragraph structure
+            words_per_paragraph = word_count // 4
+
+            prompt = f"""You are an expert at creating executive summaries for educational and technical content.
+{f'Focus: {focus_instruction}' if focus_instruction else ''}
 
 Video Title: {video_title}
 Transcript: {transcript}
 
-Create an executive summary that delivers AT LEAST {word_count} words in four cohesive paragraphs (approximately {words_per_paragraph} words per paragraph). Do not stop early; add detail until the minimum word count is reached.
+Create an executive summary of approximately {word_count} words in four cohesive paragraphs.
 
 Structure your summary with these four paragraphs:
 
-1. **Introduction** (~{words_per_paragraph} words): Open with what this content teaches and why it matters. Provide context and the core value proposition.
+1. **Introduction** (~{words_per_paragraph} words): What this content teaches and why it matters.
 
-2. **Core Themes** (~{words_per_paragraph} words): Explain the 3-4 main concepts, techniques, or arguments covered. Add supporting details and examples to reach the target length.
+2. **Core Themes** (~{words_per_paragraph} words): The 3-4 main concepts or arguments covered.
 
-3. **Practical Applications** (~{words_per_paragraph} words): Describe the practical applications, benefits, and real-world implications. Include specific use cases or outcomes.
+3. **Practical Applications** (~{words_per_paragraph} words): Real-world applications and implications.
 
-4. **Closing Recommendation** (~{words_per_paragraph} words): Conclude with who would benefit most from this content and what they will gain. Summarize the key value.
+4. **Closing Recommendation** (~{words_per_paragraph} words): Who benefits and what they'll gain.
 
-CRITICAL REQUIREMENTS:
-- Write AT LEAST {word_count} words total - do not stop short
-- Use four cohesive paragraphs with smooth transitions
-- Focus on concepts and value, NOT play-by-play actions
-- Do not mention "the video" or "the speaker" - write as if describing the topic directly
-- Use clear, professional language with sufficient detail to reach the word count
-- Make it informative enough that someone could decide whether to watch based on your summary
+REQUIREMENTS:
+- Write approximately {word_count} words total
+- Use clear, professional language
+- Focus on concepts and value, not play-by-play
+- Do not mention "the video" or "the speaker"
 
-Return ONLY the summary text with paragraph breaks, no headers or labels."""
+Return ONLY the summary text with paragraph breaks."""
+
+        # Adjust for Quick Overview focus - override to be more concise
+        if focus_area == "Quick Overview":
+            target_words = min(word_count, 150)  # Cap at 150 words for quick overview
+            prompt = f"""You are an expert at creating ultra-concise summaries.
+
+Title: {video_title}
+Content: {transcript}
+
+Create an extremely brief summary in EXACTLY 3-4 sentences (approximately {target_words} words max).
+
+REQUIREMENTS:
+- Maximum {target_words} words - be ruthlessly concise
+- Sentence 1: What is this about? (core topic)
+- Sentence 2: What's the main insight? (key takeaway)
+- Sentence 3: Why does it matter? (value/implication)
+- Sentence 4 (optional): Who is this for?
+
+Do NOT elaborate. Do NOT add details. Just the essentials.
+
+Return ONLY the 3-4 sentence summary."""
 
         try:
             if self.provider == "groq":
