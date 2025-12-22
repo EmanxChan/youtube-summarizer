@@ -543,21 +543,33 @@ if usage_percent >= 80:
 with st.expander("⚙️ Advanced Options", expanded=False):
     adv_col1, adv_col2 = st.columns(2)
 
+    # Get current values from session state (persist across reruns)
+    focus_options = list(FOCUS_AREAS.keys())
+    tone_options = list(TONE_OPTIONS.keys())
+
+    # Calculate default index from session state (preserves user selection)
+    current_focus = st.session_state.get('focus_area', 'General')
+    current_tone = st.session_state.get('tone', 'Professional')
+    focus_index = focus_options.index(current_focus) if current_focus in focus_options else 0
+    tone_index = tone_options.index(current_tone) if current_tone in tone_options else 0
+
     with adv_col1:
         focus_area = st.selectbox(
             "🎯 Focus Area",
-            options=list(FOCUS_AREAS.keys()),
-            index=0,
-            help="Adjust what aspects the summary emphasizes"
+            options=focus_options,
+            index=focus_index,
+            help="Adjust what aspects the summary emphasizes",
+            key="focus_area_select"
         )
         st.caption(f"_{FOCUS_AREAS[focus_area]}_")
 
     with adv_col2:
         tone = st.selectbox(
             "✍️ Tone",
-            options=list(TONE_OPTIONS.keys()),
-            index=0,
-            help="Adjust the writing style of the summary"
+            options=tone_options,
+            index=tone_index,
+            help="Adjust the writing style of the summary",
+            key="tone_select"
         )
         st.caption(f"_{TONE_OPTIONS[tone]}_")
 
@@ -573,9 +585,9 @@ with st.expander("⚙️ Advanced Options", expanded=False):
         st.metric("Requests", f"{requests_today}")
     st.caption("💡 Groq free tier resets daily at midnight UTC")
 
-# Store advanced options in session state for processing
-st.session_state.focus_area = focus_area if 'focus_area' in dir() else "General"
-st.session_state.tone = tone if 'tone' in dir() else "Professional"
+# Store advanced options in session state for processing (update from current selection)
+st.session_state.focus_area = focus_area
+st.session_state.tone = tone
 
 # Add session state for tracking if processing is complete
 if 'processing_complete' not in st.session_state:
