@@ -892,10 +892,7 @@ def display_url_results():
         title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
         title = title_match.group(1) if title_match else filename.replace('.md', '')
 
-        # Display the summary content first
-        st.markdown(content)
-
-        # Export button row
+        # Export button row (at top)
         base_filename = filename.rsplit('.', 1)[0]
         metadata = {'title': title, 'url': url, 'filename': filename}
         render_export_button_row(content, base_filename, metadata, "url")
@@ -921,6 +918,9 @@ def display_url_results():
             st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
             st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
             st.rerun()
+
+        # Display the summary content below
+        st.markdown(content)
 
 
 def process_file(uploaded_file, words):
@@ -1470,10 +1470,7 @@ if 'file_result' in st.session_state and st.session_state.file_result:
     title = title_match.group(1) if title_match else filename.rsplit('.', 1)[0]
     base_filename = f"{filename.rsplit('.', 1)[0]}_summary"
 
-    # Display the summary content first
-    st.markdown(content)
-
-    # Export button row
+    # Export button row (at top)
     metadata = {'title': title, 'filename': filename}
     render_export_button_row(content, base_filename, metadata, "file")
 
@@ -1486,6 +1483,9 @@ if 'file_result' in st.session_state and st.session_state.file_result:
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
 
+    # Display the summary content below
+    st.markdown(content)
+
 # Display text paste results
 if 'text_result' in st.session_state and st.session_state.text_result:
     content = st.session_state.text_result['content']
@@ -1496,10 +1496,7 @@ if 'text_result' in st.session_state and st.session_state.text_result:
     title = title_match.group(1) if title_match else filename.replace('.md', '')
     base_filename = filename.rsplit('.', 1)[0]
 
-    # Display the summary content first
-    st.markdown(content)
-
-    # Export button row
+    # Export button row (at top)
     metadata = {'title': title, 'filename': filename}
     render_export_button_row(content, base_filename, metadata, "text")
 
@@ -1511,3 +1508,6 @@ if 'text_result' in st.session_state and st.session_state.text_result:
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
+
+    # Display the summary content below
+    st.markdown(content)
