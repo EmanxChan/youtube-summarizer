@@ -419,13 +419,20 @@ with tab_history:
         search_query=history_search if history_search else None
     )
 
-    # Handle delete action
+    # Handle delete action (with validation)
     if 'delete_entry_id' in st.session_state and st.session_state.delete_entry_id:
         entry_to_delete = st.session_state.delete_entry_id
         st.session_state.delete_entry_id = None
-        if history_manager.delete_entry(entry_to_delete):
-            st.success("✓ Entry deleted from history")
-            st.rerun()
+
+        # Only delete if we have a valid entry ID
+        if entry_to_delete and len(entry_to_delete) >= 4:
+            if history_manager.delete_entry(entry_to_delete):
+                st.success(f"✓ Entry deleted from history")
+                st.rerun()
+            else:
+                st.warning("⚠️ Could not find entry to delete")
+        else:
+            st.warning("⚠️ Invalid entry ID")
 
     if history_entries:
         # Stats header
@@ -434,9 +441,17 @@ with tab_history:
 
         st.markdown("---")
 
-        for entry in history_entries:
+        for idx, entry in enumerate(history_entries):
             formatted = history_manager.format_entry_for_display(entry)
+            # Ensure entry has a valid ID (fallback to index-based ID if missing)
             entry_id = entry.get('id', '')
+            if not entry_id or len(entry_id) < 4:
+                # Generate stable fallback ID from URL hash if ID is missing
+                import hashlib
+                fallback_source = entry.get('url', '') or entry.get('title', '') or str(idx)
+                entry_id = hashlib.md5(fallback_source.encode()).hexdigest()[:8]
+                entry['id'] = entry_id  # Update entry with generated ID
+
             entry_url = entry.get('url', '')
             entry_title = formatted.get('title', 'Untitled')
             content_type = entry.get('content_type', '')

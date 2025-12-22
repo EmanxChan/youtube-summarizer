@@ -44,6 +44,21 @@ class HistoryManager:
                     # Ensure proper structure
                     if 'entries' not in data:
                         data = {'entries': [], 'version': 1}
+
+                    # Migration: ensure all entries have unique IDs
+                    needs_save = False
+                    for i, entry in enumerate(data['entries']):
+                        if not entry.get('id') or len(entry.get('id', '')) < 4:
+                            # Generate stable ID from URL or title
+                            import hashlib
+                            source = entry.get('url', '') or entry.get('title', '') or str(i)
+                            entry['id'] = hashlib.md5(source.encode()).hexdigest()[:8]
+                            needs_save = True
+
+                    if needs_save:
+                        self._history = data
+                        self._save_history()
+
                     return data
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Warning: Could not load history file: {e}")
