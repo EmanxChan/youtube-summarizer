@@ -819,6 +819,68 @@ def process_url(url, words):
                 st.code(out)
 
 
+def render_export_button_row(content: str, base_filename: str, metadata: dict, key_prefix: str):
+    """
+    Render the export button row with all format options.
+
+    Args:
+        content: Markdown content to export
+        base_filename: Base filename without extension
+        metadata: Dict with title, url, filename for export
+        key_prefix: Unique prefix for button keys (url, file, text)
+    """
+    # Export section header
+    st.markdown("---")
+    st.markdown("### 📥 Export Summary")
+
+    # Button descriptions for tooltips
+    format_info = {
+        'markdown': {'icon': '📝', 'desc': 'Original formatted document', 'ext': '.md'},
+        'pdf': {'icon': '📄', 'desc': 'Print-ready document', 'ext': '.pdf'},
+        'txt': {'icon': '📋', 'desc': 'Plain text, no formatting', 'ext': '.txt'},
+        'json': {'icon': '🔧', 'desc': 'Structured data format', 'ext': '.json'},
+        'html': {'icon': '🌐', 'desc': 'Web page format', 'ext': '.html'},
+    }
+
+    # Create 5 columns for buttons
+    cols = st.columns(5)
+
+    for idx, (fmt_key, fmt_data) in enumerate(EXPORT_FORMATS.items()):
+        info = format_info.get(fmt_key, {'icon': '📁', 'desc': '', 'ext': ''})
+
+        with cols[idx]:
+            try:
+                converted, mime, ext = convert_for_export(content, fmt_key, metadata)
+                download_filename = base_filename + ext
+
+                # Primary style for Markdown, secondary for others
+                btn_type = "primary" if fmt_key == 'markdown' else "secondary"
+
+                st.download_button(
+                    f"{info['icon']} {fmt_key.upper()}",
+                    converted,
+                    file_name=download_filename,
+                    mime=mime,
+                    use_container_width=True,
+                    type=btn_type,
+                    key=f"export_{fmt_key}_{key_prefix}",
+                    help=info['desc']
+                )
+                # Show file extension label
+                st.caption(f"<center>{info['ext']}</center>", unsafe_allow_html=True)
+
+            except Exception as e:
+                st.button(
+                    f"{info['icon']} {fmt_key.upper()}",
+                    disabled=True,
+                    use_container_width=True,
+                    key=f"export_{fmt_key}_{key_prefix}_disabled"
+                )
+                st.caption(f"<center>Error</center>", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+
 def display_url_results():
     """Display saved URL processing results with download and process another buttons"""
     if 'last_result' in st.session_state and st.session_state.last_result:
@@ -830,63 +892,35 @@ def display_url_results():
         title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
         title = title_match.group(1) if title_match else filename.replace('.md', '')
 
-        # Export format selector and download button
-        dl_col1, dl_col2 = st.columns([2, 3])
+        # Display the summary content first
+        st.markdown(content)
 
-        with dl_col1:
-            export_format = st.selectbox(
-                "Format",
-                options=list(EXPORT_FORMATS.keys()),
-                format_func=lambda x: EXPORT_FORMATS[x]['label'],
-                key="export_format_url",
-                label_visibility="collapsed"
-            )
+        # Export button row
+        base_filename = filename.rsplit('.', 1)[0]
+        metadata = {'title': title, 'url': url, 'filename': filename}
+        render_export_button_row(content, base_filename, metadata, "url")
 
-        with dl_col2:
-            # Convert content to selected format
-            try:
-                metadata = {'title': title, 'url': url, 'filename': filename}
-                converted, mime, ext = convert_for_export(content, export_format, metadata)
-
-                # Handle bytes vs string for download
-                download_filename = filename.rsplit('.', 1)[0] + ext
-
-                st.download_button(
-                    f"📥 Download {EXPORT_FORMATS[export_format]['label'].split()[0]}",
-                    converted,
-                    file_name=download_filename,
-                    mime=mime,
-                    use_container_width=True,
-                    type="primary",
-                    key="download_btn_url"
-                )
-            except Exception as e:
-                st.error(f"Export error: {e}")
-
-        # Green Process Another button below download
+        # Process Another button (green)
         st.markdown("""
         <style>
-        .stButton > button[kind="secondary"] {
+        .process-another-btn > button {
             background-color: #28a745 !important;
             color: white !important;
             border: 1px solid #28a745 !important;
         }
-        .stButton > button[kind="secondary"]:hover {
+        .process-another-btn > button:hover {
             background-color: #218838 !important;
             border-color: #1e7e34 !important;
         }
         </style>
         """, unsafe_allow_html=True)
-        if st.button("📝 Process Another", type="secondary", use_container_width=True, key="process_another_url"):
+        if st.button("📝 Process Another", use_container_width=True, key="process_another_url"):
             # Clear ALL session state for inputs
             st.session_state.last_result = None
             st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
             st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
             st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
             st.rerun()
-
-        st.markdown("---")
-        st.markdown(content)
 
 
 def process_file(uploaded_file, words):
@@ -1436,60 +1470,21 @@ if 'file_result' in st.session_state and st.session_state.file_result:
     title = title_match.group(1) if title_match else filename.rsplit('.', 1)[0]
     base_filename = f"{filename.rsplit('.', 1)[0]}_summary"
 
-    # Export format selector and download button
-    dl_col1, dl_col2 = st.columns([2, 3])
+    # Display the summary content first
+    st.markdown(content)
 
-    with dl_col1:
-        export_format_file = st.selectbox(
-            "Format",
-            options=list(EXPORT_FORMATS.keys()),
-            format_func=lambda x: EXPORT_FORMATS[x]['label'],
-            key="export_format_file",
-            label_visibility="collapsed"
-        )
+    # Export button row
+    metadata = {'title': title, 'filename': filename}
+    render_export_button_row(content, base_filename, metadata, "file")
 
-    with dl_col2:
-        try:
-            metadata = {'title': title, 'filename': filename}
-            converted, mime, ext = convert_for_export(content, export_format_file, metadata)
-            download_filename = base_filename + ext
-
-            st.download_button(
-                f"📥 Download {EXPORT_FORMATS[export_format_file]['label'].split()[0]}",
-                converted,
-                file_name=download_filename,
-                mime=mime,
-                use_container_width=True,
-                type="primary",
-                key="download_file_btn"
-            )
-        except Exception as e:
-            st.error(f"Export error: {e}")
-
-    # Green Process Another button
-    st.markdown("""
-    <style>
-    .stButton > button[kind="secondary"] {
-        background-color: #28a745 !important;
-        color: white !important;
-        border: 1px solid #28a745 !important;
-    }
-    .stButton > button[kind="secondary"]:hover {
-        background-color: #218838 !important;
-        border-color: #1e7e34 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    if st.button("📝 Process Another", type="secondary", use_container_width=True, key="process_another_file"):
+    # Process Another button (green)
+    if st.button("📝 Process Another", use_container_width=True, key="process_another_file"):
         # Clear ALL session state for inputs
         st.session_state.file_result = None
         st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
-
-    st.markdown("---")
-    st.markdown(content)
 
 # Display text paste results
 if 'text_result' in st.session_state and st.session_state.text_result:
@@ -1501,57 +1496,18 @@ if 'text_result' in st.session_state and st.session_state.text_result:
     title = title_match.group(1) if title_match else filename.replace('.md', '')
     base_filename = filename.rsplit('.', 1)[0]
 
-    # Export format selector and download button
-    dl_col1, dl_col2 = st.columns([2, 3])
+    # Display the summary content first
+    st.markdown(content)
 
-    with dl_col1:
-        export_format_text = st.selectbox(
-            "Format",
-            options=list(EXPORT_FORMATS.keys()),
-            format_func=lambda x: EXPORT_FORMATS[x]['label'],
-            key="export_format_text",
-            label_visibility="collapsed"
-        )
+    # Export button row
+    metadata = {'title': title, 'filename': filename}
+    render_export_button_row(content, base_filename, metadata, "text")
 
-    with dl_col2:
-        try:
-            metadata = {'title': title, 'filename': filename}
-            converted, mime, ext = convert_for_export(content, export_format_text, metadata)
-            download_filename = base_filename + ext
-
-            st.download_button(
-                f"📥 Download {EXPORT_FORMATS[export_format_text]['label'].split()[0]}",
-                converted,
-                file_name=download_filename,
-                mime=mime,
-                use_container_width=True,
-                type="primary",
-                key="download_text_btn"
-            )
-        except Exception as e:
-            st.error(f"Export error: {e}")
-
-    # Green Process Another button
-    st.markdown("""
-    <style>
-    .stButton > button[kind="secondary"] {
-        background-color: #28a745 !important;
-        color: white !important;
-        border: 1px solid #28a745 !important;
-    }
-    .stButton > button[kind="secondary"]:hover {
-        background-color: #218838 !important;
-        border-color: #1e7e34 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    if st.button("📝 Process Another", type="secondary", use_container_width=True, key="process_another_text"):
+    # Process Another button (green)
+    if st.button("📝 Process Another", use_container_width=True, key="process_another_text"):
         # Clear ALL session state for inputs
         st.session_state.text_result = None
         st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
-
-    st.markdown("---")
-    st.markdown(content)
