@@ -206,6 +206,29 @@ apply_dark_mode()
 # Add info box
 st.info("✨ **Supports YouTube videos, podcasts, articles, files, and text** • AI-powered summaries with key takeaways")
 
+# Add keyboard shortcut (Ctrl/Cmd + Enter) to trigger summarize button
+components.html("""
+<script>
+document.addEventListener('keydown', function(e) {
+    // Check for Ctrl+Enter or Cmd+Enter
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        // Find the Summarize button by its text content
+        const buttons = parent.document.querySelectorAll('button');
+        for (const btn of buttons) {
+            if (btn.innerText.includes('Summarize')) {
+                btn.click();
+                e.preventDefault();
+                break;
+            }
+        }
+    }
+});
+</script>
+""", height=0)
+
+# Keyboard shortcut hint style
+SHORTCUT_HINT = "⌨️ Press **⌘/Ctrl + Enter** to summarize"
+
 # === Tabbed Input Interface with Dedicated Content Types ===
 tab_yt, tab_podcast, tab_article, tab_upload, tab_text, tab_history = st.tabs([
     "🎬 YouTube",
@@ -231,6 +254,7 @@ with tab_yt:
         label_visibility="collapsed",
         key=f"youtube_input_{input_counter}"
     )
+    st.caption(SHORTCUT_HINT)
     if yt_input:
         input_type = "url"
         content = yt_input
@@ -257,6 +281,7 @@ with tab_podcast:
             label_visibility="collapsed",
             key=f"podcast_url_input_{input_counter}"
         )
+        st.caption(SHORTCUT_HINT)
         if podcast_url:
             input_type = "url"
             content = podcast_url
@@ -279,7 +304,7 @@ with tab_podcast:
             label_visibility="collapsed",
             key=f"audio_url_input_{input_counter}"
         )
-        st.caption("💡 Tip: Many podcast apps let you 'Copy Episode Link' to get a direct MP3 URL")
+        st.caption(f"💡 Tip: Many podcast apps let you 'Copy Episode Link' to get a direct MP3 URL • {SHORTCUT_HINT}")
         if audio_url:
             input_type = "url"
             content = audio_url
@@ -295,7 +320,7 @@ with tab_podcast:
             label_visibility="collapsed",
             key=f"podcast_search_input_{input_counter}"
         )
-        st.caption("💡 Format: 'Podcast Name - topic' or 'Podcast Name - latest'")
+        st.caption(f"💡 Format: 'Podcast Name - topic' or 'Podcast Name - latest' • {SHORTCUT_HINT}")
         if search_query:
             input_type = "url"
             content = search_query
@@ -310,6 +335,7 @@ with tab_article:
         label_visibility="collapsed",
         key=f"article_input_{input_counter}"
     )
+    st.caption(SHORTCUT_HINT)
     if article_url:
         input_type = "url"
         content = article_url
@@ -354,6 +380,7 @@ with tab_text:
         label_visibility="collapsed",
         key=text_key
     )
+    st.caption(SHORTCUT_HINT)
     if text_area and len(text_area.strip()) > 50:
         input_type = "text"
         content = text_area.strip()
