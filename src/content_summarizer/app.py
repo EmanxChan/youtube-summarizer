@@ -129,25 +129,6 @@ def estimate_processing_tokens(content_type, word_count):
     return input_estimate + output_tokens
 
 
-# ============================================================================
-# Custom Prompt Templates
-# ============================================================================
-
-FOCUS_AREAS = {
-    "General": "Provide a balanced overview covering all key points.",
-    "Technical": "Focus on technical details, methodologies, tools, and implementation specifics.",
-    "Business": "Emphasize business implications, ROI, market insights, and strategic value.",
-    "Learning": "Highlight educational takeaways, concepts to remember, and actionable learning points.",
-    "Quick Overview": "Provide a very concise summary hitting only the most essential points.",
-}
-
-TONE_OPTIONS = {
-    "Professional": "Use clear, professional language suitable for business contexts.",
-    "Casual": "Use conversational, approachable language that's easy to digest.",
-    "Academic": "Use formal, detailed language with emphasis on accuracy and depth.",
-    "Bullet Points": "Prioritize bullet points and lists over prose for easy scanning.",
-}
-
 # Load environment variables from .env file (project root)
 load_dotenv(ROOT / ".env")
 
@@ -573,56 +554,6 @@ with token_cols[2]:
 if usage_percent >= 80:
     st.warning("⚠️ Approaching daily limit. May fallback to smaller models.", icon="⚠️")
 
-# === Advanced Options Expander ===
-with st.expander("⚙️ Advanced Options", expanded=False):
-    adv_col1, adv_col2 = st.columns(2)
-
-    # Get current values from session state (persist across reruns)
-    focus_options = list(FOCUS_AREAS.keys())
-    tone_options = list(TONE_OPTIONS.keys())
-
-    # Calculate default index from session state (preserves user selection)
-    current_focus = st.session_state.get('focus_area', 'General')
-    current_tone = st.session_state.get('tone', 'Professional')
-    focus_index = focus_options.index(current_focus) if current_focus in focus_options else 0
-    tone_index = tone_options.index(current_tone) if current_tone in tone_options else 0
-
-    with adv_col1:
-        focus_area = st.selectbox(
-            "🎯 Focus Area",
-            options=focus_options,
-            index=focus_index,
-            help="Adjust what aspects the summary emphasizes",
-            key="focus_area_select"
-        )
-        st.caption(f"_{FOCUS_AREAS[focus_area]}_")
-
-    with adv_col2:
-        tone = st.selectbox(
-            "✍️ Tone",
-            options=tone_options,
-            index=tone_index,
-            help="Adjust the writing style of the summary",
-            key="tone_select"
-        )
-        st.caption(f"_{TONE_OPTIONS[tone]}_")
-
-    # Detailed token info
-    st.markdown("---")
-    st.caption("**Token Details**")
-    detail_cols = st.columns(3)
-    with detail_cols[0]:
-        st.metric("Used Today", f"{tokens_used:,}")
-    with detail_cols[1]:
-        st.metric("Remaining", f"{tokens_remaining:,}")
-    with detail_cols[2]:
-        st.metric("Requests", f"{requests_today}")
-    st.caption("💡 Groq free tier resets daily at midnight UTC")
-
-# Store advanced options in session state for processing (update from current selection)
-st.session_state.focus_area = focus_area
-st.session_state.tone = tone
-
 # Add session state for tracking if processing is complete
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
@@ -796,18 +727,12 @@ def process_url(url, words):
         script_path = ROOT / "src" / "content_summarizer" / "youtube_slash_command.py"
         
         # Use sys.executable to ensure subprocess uses same Python interpreter with installed packages
-        # Get custom prompt settings from session state
-        focus = st.session_state.get('focus_area', 'General')
-        tone_setting = st.session_state.get('tone', 'Professional')
-
         cmd = [
             sys.executable, str(script_path), url,
             "--format", "md",
             "--words", str(words),
             "--ai-provider", os.getenv("AI_PROVIDER", "groq"),
-            "--ai-model", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-            "--focus-area", focus,
-            "--tone", tone_setting
+            "--ai-model", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         ]
         
         status_placeholder.info("📥 Fetching content...")
@@ -1002,10 +927,6 @@ def process_file(uploaded_file, words):
     # Check if PDF
     is_pdf = uploaded_file.name.lower().endswith('.pdf')
 
-    # Get custom prompt settings from session state
-    focus = st.session_state.get('focus_area', 'General')
-    tone_setting = st.session_state.get('tone', 'Professional')
-    
     # Create progress placeholder
     progress_text = st.empty()
     progress_bar = st.progress(0)
@@ -1129,8 +1050,8 @@ try:
     # Summarize
     print("Starting summarization...", file=sys.stderr)
     summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
-    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5, focus_area="{focus}", tone="{tone_setting}")
-    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words}, focus_area="{focus}", tone="{tone_setting}")
+    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5)
+    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words})
 
     # Save to correct folder (PDFs go to article folder)
     from pathlib import Path
@@ -1197,8 +1118,8 @@ try:
     # Summarize
     print("Starting summarization...", file=sys.stderr)
     summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
-    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5, focus_area="{focus}", tone="{tone_setting}")
-    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words}, focus_area="{focus}", tone="{tone_setting}")
+    takeaways = summarizer.generate_key_takeaways(transcript, "{safe_filename}", count=5)
+    summary = summarizer.generate_executive_summary(transcript, "{safe_filename}", word_count={words})
 
     # Save to correct folder (Zoom files go to youtube folder)
     import os
@@ -1358,10 +1279,6 @@ except Exception as e:
 def process_text(text_content, words):
     """Process pasted text directly"""
 
-    # Get custom prompt settings from session state
-    focus = st.session_state.get('focus_area', 'General')
-    tone_setting = st.session_state.get('tone', 'Professional')
-
     status_placeholder = st.empty()
     status_placeholder.info("✨ Generating AI summary...")
     
@@ -1396,8 +1313,8 @@ title = "Pasted Content"
 
 try:
     summarizer = AITranscriptSummarizer(provider='groq', model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'))
-    takeaways = summarizer.generate_key_takeaways(transcript, title, count=5, focus_area="{focus}", tone="{tone_setting}")
-    summary = summarizer.generate_executive_summary(transcript, title, word_count={words}, focus_area="{focus}", tone="{tone_setting}")
+    takeaways = summarizer.generate_key_takeaways(transcript, title, count=5)
+    summary = summarizer.generate_executive_summary(transcript, title, word_count={words})
 
     # Save to correct folder (pasted text goes to article folder)
     from pathlib import Path
