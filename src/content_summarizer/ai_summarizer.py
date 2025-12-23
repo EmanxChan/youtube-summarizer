@@ -279,7 +279,7 @@ class AITranscriptSummarizer:
                                 max_tokens=max_tokens
                             )
                             return response.choices[0].message.content
-                        except:
+                        except Exception:
                             pass
                     continue
 
@@ -302,7 +302,7 @@ class AITranscriptSummarizer:
         if self.provider in ["openai", "deepseek", "groq"]:
             try:
                 encoder = tiktoken.encoding_for_model(self.model)
-            except:
+            except Exception:
                 encoder = tiktoken.get_encoding("cl100k_base")
             return len(encoder.encode(text))
         else:
