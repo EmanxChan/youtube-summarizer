@@ -330,86 +330,65 @@ class AITranscriptSummarizer:
         if len(transcript) > max_chars:
             transcript = transcript[:max_chars]
 
-        # Build focus area instruction
-        focus_instruction = ""
-        if focus_area and focus_area != "General":
-            focus_map = {
-                "Technical": "Focus heavily on technical details, methodologies, tools, implementation specifics, and how things work under the hood.",
-                "Business": "Emphasize business implications, ROI, market insights, strategic value, competitive advantages, and practical business applications.",
-                "Learning": "Highlight educational takeaways, key concepts to remember, learning progressions, and actionable knowledge that can be applied immediately.",
-                "Quick Overview": "Be extremely concise. Focus only on the most essential, high-impact points. Skip nuance in favor of clarity.",
-            }
-            focus_instruction = f"\n\nFOCUS AREA: {focus_map.get(focus_area, '')}"
+        # =====================================================================
+        # Build focus-specific and tone-specific instructions for takeaways
+        # =====================================================================
 
-        # Build tone instruction
-        tone_instruction = ""
-        if tone and tone != "Professional":
-            tone_map = {
-                "Casual": "Use conversational, approachable language. Write as if explaining to a friend over coffee.",
-                "Academic": "Use formal, precise language with emphasis on accuracy, nuance, and intellectual depth.",
-                "Bullet Points": "Be extremely concise. Use short, punchy sentences. Prioritize scannability over prose.",
-            }
-            tone_instruction = f"\n\nTONE: {tone_map.get(tone, '')}"
+        # Define focus-specific framing
+        focus_framing = {
+            "General": "Extract the most important conceptual insights.",
+            "Technical": "Focus on technical insights: how things work, implementation details, tools, architectures, and technical tradeoffs.",
+            "Business": "Focus on business insights: ROI implications, competitive advantages, market opportunities, and strategic value.",
+            "Learning": "Focus on educational insights: key concepts to remember, learning progressions, and actionable skills.",
+            "Quick Overview": "Focus only on the 3 most essential, high-impact points. Be extremely concise.",
+        }
 
-        prompt = f"""You are a world-class analyst who extracts profound, non-obvious insights from educational content. Your insights reveal deeper patterns, tradeoffs, and strategic implications that most people miss.{focus_instruction}{tone_instruction}
+        # Define tone-specific style
+        tone_style = {
+            "Professional": "Use clear, professional language.",
+            "Casual": "Use friendly, conversational language as if explaining to a colleague.",
+            "Academic": "Use formal, precise academic language with appropriate hedging.",
+            "Bullet Points": "Be ultra-concise. Short punchy sentences only.",
+        }
+
+        # Adjust count for Quick Overview
+        actual_count = 3 if focus_area == "Quick Overview" else count
+
+        # Get specific instructions
+        focus_inst = focus_framing.get(focus_area, focus_framing["General"])
+        tone_inst = tone_style.get(tone, tone_style["Professional"])
+
+        # Determine length guideline based on tone
+        if tone == "Bullet Points":
+            length_guide = "Be ultra-concise (15-20 words max per insight)"
+        elif tone == "Casual" or focus_area == "Quick Overview":
+            length_guide = "Keep it brief (20-30 words per insight)"
+        else:
+            length_guide = "Use 30-40 words per insight"
+
+        prompt = f"""You are a world-class analyst extracting insights from content.
+
+FOCUS: {focus_inst}
+STYLE: {tone_inst}
 
 Title: {video_title}
 Content: {transcript}
 
-Generate exactly {count} insights that capture the deepest concepts, principles, and strategic implications from this content.
+Generate exactly {actual_count} insights.
 
-EMOJI REQUIREMENT - Start EACH insight with ONE relevant emoji from this palette:
-🎯 = Core concept, main point, key takeaway
-💡 = Revelation, aha moment, new perspective
-⚠️ = Warning, tradeoff, limitation, risk
-🔄 = Process, cycle, feedback loop, iteration
-📈 = Growth, improvement, scaling, progress
-🧠 = Mental model, framework, thinking pattern
-⏱️ = Timing, when to act, temporal insight
-🔗 = Connection, relationship, dependency
-💰 = Value, ROI, cost-benefit, investment
-🛡️ = Protection, defense, risk mitigation
-🔑 = Unlock, enabler, critical factor
-✨ = Opportunity, potential, possibility
+EMOJI REQUIREMENT - Start EACH insight with ONE relevant emoji:
+🎯 Core concept | 💡 Revelation | ⚠️ Warning/tradeoff | 🔄 Process
+📈 Growth | 🧠 Mental model | 💰 Value/ROI | 🔑 Key enabler | ✨ Opportunity
 
-Choose the emoji that BEST matches the insight's core message.
+REQUIREMENTS:
+1. Start with ONE emoji
+2. Reveal WHY something works, not just WHAT
+3. Be non-obvious and memorable
+4. {length_guide}
 
-CRITICAL REQUIREMENTS - Each insight MUST:
+AVOID: Generic truisms, obvious statements, vague platitudes.
 
-1. **Start with ONE emoji** from the palette above
-2. **Reveal underlying mechanisms** - Explain WHY something works, not just WHAT
-3. **Include tradeoffs or limitations** - Nothing is universally good
-4. **Be non-obvious** - Surface surprising or counterintuitive aspects
-5. **Use specific examples** - Reference concrete situations from the content
-6. **Be memorable** - Should stick in someone's mind
-
-LENGTH: 30-40 words per insight (2-3 sentences)
-
-AVOID AT ALL COSTS:
-- Generic truisms ("X improves Y")
-- Obvious statements anyone would know
-- Starting with action verbs (Learn, Master, Implement)
-- Vague platitudes without specifics
-
-EXAMPLES OF EXCELLENT INSIGHTS:
-
-BAD: "Planning with AI is more efficient than jumping straight to coding."
-
-GOOD: "🔄 AI code assistants front-load cognitive work—requiring extensive upfront context—because they lack implicit codebase understanding, creating a fundamental inversion where setup investment determines long-term leverage rather than immediate productivity."
-
-BAD: "Research strategies help an AI learn patterns in a codebase."
-
-GOOD: "🧠 Multiple research strategies exist because no single approach captures both explicit patterns (what code does) and implicit taste (how teams prefer it), requiring triangulation through complementary lenses like anthropologists studying culture."
-
-BAD: "Expanding the AI's knowledge improves performance over time."
-
-GOOD: "📈 AI assistants demonstrate compound learning where initial context-gathering creates diminishing returns on individual queries but exponential improvements in decision quality, inverting the typical tool learning curve."
-
----
-
-Generate {count} insights matching this quality standard. Each must start with ONE emoji and be profound enough that an expert would pause and think.
-
-Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight text."""
+Return ONLY {actual_count} insights, one per line. Format: EMOJI + space + insight."""
 
         try:
             if self.provider == "groq":
@@ -519,40 +498,326 @@ Return ONLY the {count} insights, one per line. Format: EMOJI + space + insight 
                         transcript[len(transcript)//2 - third//2:len(transcript)//2 + third//2] + \
                         " [...] " + transcript[-third:]
 
-        # Build focus area instruction
-        focus_instruction = ""
-        if focus_area and focus_area != "General":
-            focus_map = {
-                "Technical": "Emphasize technical details, methodologies, tools, and implementation specifics.",
-                "Business": "Focus on business implications, ROI, market insights, and strategic value.",
-                "Learning": "Highlight educational value, key concepts, and actionable knowledge.",
-                "Quick Overview": "Be extremely concise. Only the most essential points.",
-            }
-            focus_instruction = focus_map.get(focus_area, '')
+        # =====================================================================
+        # PROMPT SELECTION LOGIC
+        # Each Focus Area + Tone combination should produce distinct output
+        # =====================================================================
 
-        # Use different prompt templates based on tone
-        if tone == "Bullet Points":
-            # Bullet point format - completely different structure
-            prompt = f"""You are an expert at creating scannable, bullet-pointed summaries.
-
-Title: {video_title}
+        # Quick Overview FOCUS - ultra concise (works with any tone)
+        if focus_area == "Quick Overview":
+            target_words = min(word_count, 150)
+            if tone == "Bullet Points":
+                prompt = f"""Title: {video_title}
 Content: {transcript}
 
-Create a bullet-pointed summary that is easy to scan and digest quickly.
-{f'Focus: {focus_instruction}' if focus_instruction else ''}
-
-FORMAT REQUIREMENTS:
-Use this exact structure with bullet points:
+Create an ULTRA-BRIEF bullet summary (max {target_words} words):
 
 ## TL;DR
-• One sentence capturing the core message
+• [One sentence - the core message]
+
+## 3 Key Points
+• [Most important point]
+• [Second most important]
+• [Third most important]
+
+Rules: Maximum {target_words} words total. No elaboration."""
+
+            elif tone == "Casual":
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Give me the quick version like you're texting a friend (max {target_words} words):
+
+Basically, this is about [topic]. The main thing you need to know is [key insight].
+Bottom line: [why it matters].
+
+Keep it super casual and under {target_words} words. No fluff."""
+
+            elif tone == "Academic":
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Provide a concise abstract (max {target_words} words):
+
+This work examines [topic]. The principal finding suggests [key insight].
+These observations indicate [implication].
+
+Formal language, {target_words} words maximum."""
+
+            else:  # Professional
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create an executive brief in 3-4 sentences (max {target_words} words):
+- Sentence 1: Core topic
+- Sentence 2: Key insight
+- Sentence 3: Value/implication
+- Sentence 4 (optional): Target audience
+
+Maximum {target_words} words. No elaboration."""
+
+        # Technical FOCUS - emphasize how things work
+        elif focus_area == "Technical":
+            if tone == "Bullet Points":
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create a TECHNICAL bullet-point summary (~{word_count} words):
+
+## Technical Overview
+• [Core technology/methodology]
+
+## Implementation Details
+• [Technical detail 1 - specific tools, methods, or approaches]
+• [Technical detail 2]
+• [Technical detail 3]
+• [Technical detail 4]
+
+## Architecture/Process
+• [How components interact]
+• [Key technical decisions]
+
+## Technical Considerations
+• [Limitations or tradeoffs]
+• [Performance considerations]
+• [Prerequisites or dependencies]
+
+Focus on HOW things work, not just WHAT. Be specific about tools, methods, and implementation."""
+
+            elif tone == "Casual":
+                words_per_section = word_count // 3
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Explain the technical stuff like you're helping a colleague (~{word_count} words):
+
+**Here's how it works** (~{words_per_section} words):
+Walk them through the core technical concepts in plain language.
+
+**The nitty-gritty** (~{words_per_section} words):
+Specific tools, methods, and implementation details - but keep it approachable.
+
+**Watch out for** (~{words_per_section} words):
+Practical technical considerations, gotchas, and tips.
+
+Make it technical but friendly - like pair programming with a friend."""
+
+            elif tone == "Academic":
+                words_per_section = word_count // 4
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Compose a technical analysis (~{word_count} words):
+
+**Methodology** (~{words_per_section} words): Describe the technical approach and frameworks employed.
+
+**Implementation** (~{words_per_section} words): Detail the specific technologies, architectures, and processes.
+
+**Technical Evaluation** (~{words_per_section} words): Analyze performance characteristics, scalability, and limitations.
+
+**Technical Implications** (~{words_per_section} words): Discuss broader technical significance and future considerations.
+
+Use precise technical terminology. Reference specific tools and methodologies."""
+
+            else:  # Professional
+                words_per_section = word_count // 4
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create a technical executive summary (~{word_count} words):
+
+**Technical Context** (~{words_per_section} words): What technology/methodology is being discussed and why it matters.
+
+**Core Technical Concepts** (~{words_per_section} words): The key technical details, tools, and approaches.
+
+**Implementation Considerations** (~{words_per_section} words): How to apply this technically, including requirements and tradeoffs.
+
+**Technical Recommendation** (~{words_per_section} words): Who should implement this and what they need to know.
+
+Focus on technical specifics. Include tool names, methods, and implementation details."""
+
+        # Business FOCUS - emphasize ROI and strategic value
+        elif focus_area == "Business":
+            if tone == "Bullet Points":
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create a BUSINESS-FOCUSED bullet summary (~{word_count} words):
+
+## Executive Summary
+• [One-line business value proposition]
+
+## Business Impact
+• [Revenue/cost implication]
+• [Competitive advantage]
+• [Market opportunity]
+
+## Strategic Considerations
+• [Key business decision point]
+• [Resource requirements]
+• [Risk factors]
+
+## ROI Indicators
+• [Measurable benefit 1]
+• [Measurable benefit 2]
+
+## Recommended Action
+• [What business leaders should do]
+
+Focus on business value, ROI, and strategic implications."""
+
+            elif tone == "Casual":
+                words_per_section = word_count // 3
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Break down the business angle like you're chatting with a colleague (~{word_count} words):
+
+**Why should we care?** (~{words_per_section} words):
+The business opportunity in plain terms - money, growth, competitive edge.
+
+**What's it gonna take?** (~{words_per_section} words):
+Resources, investment, and realistic expectations.
+
+**Bottom line** (~{words_per_section} words):
+Should we do this? Who wins? What's the play?
+
+Keep it business-savvy but conversational."""
+
+            elif tone == "Academic":
+                words_per_section = word_count // 4
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Compose a business analysis (~{word_count} words):
+
+**Market Context** (~{words_per_section} words): Situate within broader market dynamics and competitive landscape.
+
+**Value Proposition Analysis** (~{words_per_section} words): Examine the economic rationale and strategic positioning.
+
+**Implementation Economics** (~{words_per_section} words): Assess resource allocation, investment requirements, and projected returns.
+
+**Strategic Implications** (~{words_per_section} words): Discuss long-term business trajectory and competitive implications.
+
+Use business/economics terminology. Reference frameworks like ROI, TCO, competitive advantage."""
+
+            else:  # Professional
+                words_per_section = word_count // 4
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create a business executive summary (~{word_count} words):
+
+**Business Opportunity** (~{words_per_section} words): What's the business value and why does it matter now?
+
+**Strategic Value** (~{words_per_section} words): Competitive advantages, market positioning, and growth potential.
+
+**Investment & Returns** (~{words_per_section} words): Resource requirements, timeline, and expected ROI.
+
+**Executive Recommendation** (~{words_per_section} words): Clear recommendation with success metrics.
+
+Focus on business outcomes, not technical details. Quantify where possible."""
+
+        # Learning FOCUS - emphasize educational value
+        elif focus_area == "Learning":
+            if tone == "Bullet Points":
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create a LEARNING-FOCUSED bullet summary (~{word_count} words):
+
+## What You'll Learn
+• [Core concept 1]
+• [Core concept 2]
+• [Core concept 3]
+
+## Key Concepts Explained
+• [Concept]: [Brief explanation]
+• [Concept]: [Brief explanation]
+• [Concept]: [Brief explanation]
+
+## Practice Exercises
+• [How to apply concept 1]
+• [How to apply concept 2]
+
+## Prerequisites
+• [What you should know first]
+
+## Next Steps
+• [What to learn next]
+• [Resources for deeper learning]
+
+Focus on teachable concepts and actionable learning."""
+
+            elif tone == "Casual":
+                words_per_section = word_count // 3
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Break this down like a study buddy (~{word_count} words):
+
+**Here's what you're gonna learn** (~{words_per_section} words):
+The main concepts in friendly, memorable terms.
+
+**Let me explain it simply** (~{words_per_section} words):
+Key ideas broken down with examples you'll remember.
+
+**Now try this** (~{words_per_section} words):
+How to actually practice and apply what you learned.
+
+Make it feel like helpful study notes, not a textbook."""
+
+            elif tone == "Academic":
+                words_per_section = word_count // 4
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Compose an educational analysis (~{word_count} words):
+
+**Learning Objectives** (~{words_per_section} words): Identify the core competencies and knowledge domains addressed.
+
+**Conceptual Framework** (~{words_per_section} words): Explain the theoretical foundations and key constructs.
+
+**Pedagogical Approach** (~{words_per_section} words): Analyze the instructional methods and learning progressions.
+
+**Assessment & Application** (~{words_per_section} words): Describe how learners can demonstrate mastery and apply knowledge.
+
+Use educational terminology. Reference learning theories where applicable."""
+
+            else:  # Professional
+                words_per_section = word_count // 4
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create an educational summary (~{word_count} words):
+
+**Learning Objectives** (~{words_per_section} words): What skills or knowledge will be gained?
+
+**Core Concepts** (~{words_per_section} words): The key ideas explained clearly with context.
+
+**Practical Application** (~{words_per_section} words): How to apply this learning in real situations.
+
+**Next Steps** (~{words_per_section} words): Recommended path for continued learning.
+
+Focus on teaching and skill-building. Make concepts stick."""
+
+        # General FOCUS with different tones
+        else:  # General focus
+            if tone == "Bullet Points":
+                prompt = f"""Title: {video_title}
+Content: {transcript}
+
+Create a bullet-pointed summary (~{word_count} words):
+
+## TL;DR
+• [One sentence core message]
 
 ## Key Points
-• Point 1: [specific insight or concept]
-• Point 2: [specific insight or concept]
-• Point 3: [specific insight or concept]
-• Point 4: [specific insight or concept]
-• Point 5: [specific insight or concept]
+• [Point 1: specific insight]
+• [Point 2: specific insight]
+• [Point 3: specific insight]
+• [Point 4: specific insight]
+• [Point 5: specific insight]
 
 ## Main Takeaways
 • [Actionable takeaway 1]
@@ -563,116 +828,59 @@ Use this exact structure with bullet points:
 • [Target audience 1]
 • [Target audience 2]
 
-CRITICAL RULES:
-- Use bullet points (•) for ALL content
-- Keep each bullet to 1-2 sentences max
-- No long paragraphs - everything should be scannable
-- Be specific and concrete, not vague
-- Total length: approximately {word_count} words
+Use bullet points throughout. Keep each bullet to 1-2 sentences."""
 
-Return ONLY the formatted summary with headers and bullet points."""
-
-        elif tone == "Casual":
-            # Casual conversational tone
-            words_per_section = word_count // 3
-            prompt = f"""You are a friendly expert explaining content to a friend over coffee.
-
-Title: {video_title}
+            elif tone == "Casual":
+                words_per_section = word_count // 3
+                prompt = f"""Title: {video_title}
 Content: {transcript}
 
-Write a casual, conversational summary as if you're telling a friend about this.
-{f'Focus: {focus_instruction}' if focus_instruction else ''}
+Write a casual summary like you're telling a friend (~{word_count} words):
 
-STYLE GUIDELINES:
-- Use "you" and "we" - make it personal
-- Use everyday language, no jargon
-- It's okay to use contractions (don't, isn't, etc.)
-- Add personality - be enthusiastic where appropriate
-- Use short sentences and simple words
+**What's this about?** (~{words_per_section} words):
+Hook them with why this is interesting and worth knowing.
 
-STRUCTURE (~{word_count} words total):
-1. Hook them in (~{words_per_section} words): Start with why this matters to them personally
-2. The good stuff (~{words_per_section} words): Share the most interesting insights conversationally
-3. What to do with it (~{words_per_section} words): Practical next steps in friendly language
+**Here's the good stuff** (~{words_per_section} words):
+Share the most interesting insights in a conversational way.
 
-Return ONLY the summary text."""
+**What you can do with this** (~{words_per_section} words):
+Practical takeaways in friendly language.
 
-        elif tone == "Academic":
-            # Formal academic tone
-            words_per_section = word_count // 4
-            prompt = f"""You are an academic researcher writing a formal summary.
+Use "you" and "we". Contractions are fine. Keep it real."""
 
-Title: {video_title}
+            elif tone == "Academic":
+                words_per_section = word_count // 4
+                prompt = f"""Title: {video_title}
 Content: {transcript}
 
-Write a formal academic summary with precise language and intellectual rigor.
-{f'Focus: {focus_instruction}' if focus_instruction else ''}
+Compose a formal academic summary (~{word_count} words):
 
-STYLE GUIDELINES:
-- Use formal, precise language
-- Employ academic vocabulary appropriately
-- Maintain objectivity and analytical distance
-- Reference methodologies and frameworks where relevant
-- Use hedging language where appropriate ("suggests", "indicates", "appears to")
+**Abstract** (~{words_per_section} words): Overview of thesis and significance.
 
-STRUCTURE (~{word_count} words total):
-1. Abstract (~{words_per_section} words): Concise overview of the content's thesis and significance
-2. Key Findings (~{words_per_section} words): Principal arguments and evidence presented
-3. Analysis (~{words_per_section} words): Critical examination of the content's contributions
-4. Implications (~{words_per_section} words): Broader significance and areas for further inquiry
+**Key Findings** (~{words_per_section} words): Principal arguments and evidence.
 
-Return ONLY the summary text."""
+**Analysis** (~{words_per_section} words): Critical examination of contributions.
 
-        else:
-            # Default Professional tone with paragraph structure
-            words_per_paragraph = word_count // 4
+**Implications** (~{words_per_section} words): Broader significance and future directions.
 
-            prompt = f"""You are an expert at creating executive summaries for educational and technical content.
-{f'Focus: {focus_instruction}' if focus_instruction else ''}
+Use formal language. Employ hedging where appropriate ("suggests", "indicates")."""
 
-Video Title: {video_title}
-Transcript: {transcript}
+            else:  # Professional (default)
+                words_per_paragraph = word_count // 4
+                prompt = f"""Title: {video_title}
+Content: {transcript}
 
-Create an executive summary of approximately {word_count} words in four cohesive paragraphs.
+Create an executive summary (~{word_count} words) in four paragraphs:
 
-Structure your summary with these four paragraphs:
+1. **Introduction** (~{words_per_paragraph} words): What this covers and why it matters.
 
-1. **Introduction** (~{words_per_paragraph} words): What this content teaches and why it matters.
-
-2. **Core Themes** (~{words_per_paragraph} words): The 3-4 main concepts or arguments covered.
+2. **Core Themes** (~{words_per_paragraph} words): The 3-4 main concepts or arguments.
 
 3. **Practical Applications** (~{words_per_paragraph} words): Real-world applications and implications.
 
-4. **Closing Recommendation** (~{words_per_paragraph} words): Who benefits and what they'll gain.
+4. **Recommendation** (~{words_per_paragraph} words): Who benefits and what they'll gain.
 
-REQUIREMENTS:
-- Write approximately {word_count} words total
-- Use clear, professional language
-- Focus on concepts and value, not play-by-play
-- Do not mention "the video" or "the speaker"
-
-Return ONLY the summary text with paragraph breaks."""
-
-        # Adjust for Quick Overview focus - override to be more concise
-        if focus_area == "Quick Overview":
-            target_words = min(word_count, 150)  # Cap at 150 words for quick overview
-            prompt = f"""You are an expert at creating ultra-concise summaries.
-
-Title: {video_title}
-Content: {transcript}
-
-Create an extremely brief summary in EXACTLY 3-4 sentences (approximately {target_words} words max).
-
-REQUIREMENTS:
-- Maximum {target_words} words - be ruthlessly concise
-- Sentence 1: What is this about? (core topic)
-- Sentence 2: What's the main insight? (key takeaway)
-- Sentence 3: Why does it matter? (value/implication)
-- Sentence 4 (optional): Who is this for?
-
-Do NOT elaborate. Do NOT add details. Just the essentials.
-
-Return ONLY the 3-4 sentence summary."""
+Professional language. Focus on value, not play-by-play."""
 
         try:
             if self.provider == "groq":
