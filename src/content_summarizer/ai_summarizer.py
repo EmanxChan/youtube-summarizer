@@ -525,6 +525,126 @@ Professional language. Focus on value, not play-by-play."""
             print(f"Error generating summary: {e}", file=sys.stderr)
             return ""
 
+    def generate_chat_response(self, question: str, transcript: str,
+                                summary: str, takeaways: List[str],
+                                title: str, chat_history: List[Dict] = None) -> str:
+        """
+        Generate a contextual chat response based on the content.
+
+        Args:
+            question: User's question
+            transcript: The content transcript (will be truncated if needed)
+            summary: The executive summary
+            takeaways: List of key takeaways
+            title: Content title
+            chat_history: Previous chat turns [{'role': 'user'|'assistant', 'content': '...'}]
+
+        Returns:
+            AI response string
+        """
+        # Build context with smart truncation
+        takeaways_text = "\n".join(f"• {t}" for t in takeaways) if takeaways else "N/A"
+
+        # Truncate transcript to fit in context window
+        # Reserve ~4000 chars for transcript excerpt
+        max_transcript_chars = 4000
+        if len(transcript) > max_transcript_chars:
+            # Take beginning and end for context
+            half = max_transcript_chars // 2
+            transcript_excerpt = transcript[:half] + "\n[...]\n" + transcript[-half:]
+        else:
+            transcript_excerpt = transcript
+
+        # Build chat history context (last 5 turns)
+        history_context = ""
+        if chat_history:
+            recent = chat_history[-5:]
+            history_lines = []
+            for turn in recent:
+                role = "User" if turn['role'] == 'user' else "Assistant"
+                history_lines.append(f"{role}: {turn['content']}")
+            history_context = "\n".join(history_lines)
+
+        system_prompt = """You are a helpful assistant answering questions about content the user just consumed.
+
+RULES:
+- Answer based ONLY on the provided content (summary, takeaways, transcript)
+- If the answer isn't in the content, say "I don't see that covered in this content"
+- Be concise (2-4 sentences unless asked for detail)
+- Reference specific points from the content when possible
+- Don't make up information not present in the source material"""
+
+        user_prompt = f"""CONTENT TITLE: {title}
+
+SUMMARY:
+{summary}
+
+KEY TAKEAWAYS:
+{takeaways_text}
+
+TRANSCRIPT EXCERPT:
+{transcript_excerpt}
+
+{f"PREVIOUS CONVERSATION:{chr(10)}{history_context}{chr(10)}" if history_context else ""}
+USER QUESTION: {question}
+
+Provide a helpful, accurate answer based on the content above."""
+
+        try:
+            if self.provider == "groq":
+                content = self._groq_api_call_with_fallback(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=500
+                )
+                return content.strip()
+
+            elif self.provider in ["openai", "deepseek"]:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=500
+                )
+                return response.choices[0].message.content.strip()
+
+            elif self.provider == "anthropic":
+                response = self.client.messages.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": f"{system_prompt}\n\n{user_prompt}"}],
+                    max_tokens=500,
+                    temperature=0.7
+                )
+                return response.content[0].text.strip()
+
+            elif self.provider == "ollama":
+                import requests
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": f"{system_prompt}\n\n{user_prompt}",
+                        "stream": False
+                    }
+                )
+                return response.json()["response"].strip()
+
+            else:
+                return "Chat not available for this provider."
+
+        except RateLimitError as e:
+            print(f"Rate limit error in chat: {e}", file=sys.stderr)
+            return "I'm currently rate limited. Please try again in a moment."
+        except Exception as e:
+            print(f"Error generating chat response: {e}", file=sys.stderr)
+            return f"Sorry, I encountered an error: {str(e)}"
+
     def generate_highlights(self, transcript: str, video_title: str,
                            content_type: str = "video",
                            timestamp_data: List[Dict] = None,

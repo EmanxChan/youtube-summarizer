@@ -776,7 +776,8 @@ def process_url(url, words):
                     st.session_state.last_result = {
                         'content': content,
                         'filename': os.path.basename(path),
-                        'url': url  # Store URL for history
+                        'url': url,  # Store URL for history
+                        'output_file': path  # Full path for chat Q&A persistence
                     }
 
                     # Extract title from markdown content
@@ -879,6 +880,128 @@ def render_export_button_row(content: str, base_filename: str, metadata: dict, k
     st.markdown("---")
 
 
+def render_chat_section(content: str, title: str, output_file: str = None):
+    """
+    Render the chat interface for asking questions about the content.
+
+    Args:
+        content: The full markdown content (to extract summary/takeaways/transcript)
+        title: Content title
+        output_file: Path to markdown file to append Q&A to
+    """
+    import re
+
+    # Initialize chat state
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    if 'chat_context' not in st.session_state:
+        st.session_state.chat_context = {}
+
+    # Parse context from content
+    summary_match = re.search(r'## 📝 Executive Summary\s+(.+?)(?=\n##|\n---|\Z)', content, re.DOTALL)
+    summary = summary_match.group(1).strip() if summary_match else ""
+
+    takeaways_match = re.search(r'## 🎯 Key (?:Takeaways|Insights)\s+(.+?)(?=\n##|\n---|\Z)', content, re.DOTALL)
+    takeaways_text = takeaways_match.group(1).strip() if takeaways_match else ""
+    takeaways = [line.strip().lstrip('•-* ') for line in takeaways_text.split('\n') if line.strip() and not line.startswith('#')]
+
+    # Look for transcript section (may not exist in all outputs)
+    transcript_match = re.search(r'## (?:📜 )?(?:Full )?Transcript\s+(.+?)(?=\n##|\n---|\Z)', content, re.DOTALL | re.IGNORECASE)
+    transcript = transcript_match.group(1).strip() if transcript_match else content  # Fall back to full content
+
+    # Store context
+    st.session_state.chat_context = {
+        'summary': summary,
+        'takeaways': takeaways,
+        'transcript': transcript,
+        'title': title,
+        'output_file': output_file
+    }
+
+    # Chat section
+    st.markdown("---")
+    st.markdown("### 💬 Ask About This Content")
+    st.caption("Ask questions about the content and get AI-powered answers based on the summary and transcript.")
+
+    # Display chat history
+    chat_container = st.container()
+    with chat_container:
+        for msg in st.session_state.chat_history:
+            if msg['role'] == 'user':
+                st.markdown(f"**You:** {msg['content']}")
+            else:
+                st.markdown(f"**AI:** {msg['content']}")
+
+    # Chat input
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        user_question = st.text_input(
+            "Your question",
+            placeholder="What tools were mentioned? What's the main takeaway? etc.",
+            label_visibility="collapsed",
+            key="chat_input"
+        )
+    with col2:
+        send_clicked = st.button("Send", type="primary", use_container_width=True, key="send_chat")
+
+    # Handle send
+    if send_clicked and user_question.strip():
+        with st.spinner("Thinking..."):
+            try:
+                # Import and use the summarizer for chat
+                from content_summarizer.ai_summarizer import AITranscriptSummarizer
+                import os
+
+                summarizer = AITranscriptSummarizer(
+                    provider='groq',
+                    model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+                )
+
+                ctx = st.session_state.chat_context
+                response = summarizer.generate_chat_response(
+                    question=user_question.strip(),
+                    transcript=ctx.get('transcript', ''),
+                    summary=ctx.get('summary', ''),
+                    takeaways=ctx.get('takeaways', []),
+                    title=ctx.get('title', 'Content'),
+                    chat_history=st.session_state.chat_history
+                )
+
+                # Add to history
+                st.session_state.chat_history.append({'role': 'user', 'content': user_question.strip()})
+                st.session_state.chat_history.append({'role': 'assistant', 'content': response})
+
+                # Persist to markdown file if path provided
+                if output_file and os.path.exists(output_file):
+                    try:
+                        with open(output_file, 'r', encoding='utf-8') as f:
+                            file_content = f.read()
+
+                        # Add Q&A section if not present
+                        if '## 💬 Q&A' not in file_content:
+                            file_content += "\n\n---\n\n## 💬 Q&A\n"
+
+                        # Append this Q&A
+                        qa_entry = f"\n**Q:** {user_question.strip()}\n\n**A:** {response}\n"
+                        file_content += qa_entry
+
+                        with open(output_file, 'w', encoding='utf-8') as f:
+                            f.write(file_content)
+                    except Exception as e:
+                        print(f"Error saving Q&A to file: {e}", file=sys.stderr)
+
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Error generating response: {e}")
+
+    # Clear chat button
+    if st.session_state.chat_history:
+        if st.button("🗑️ Clear Chat", key="clear_chat"):
+            st.session_state.chat_history = []
+            st.rerun()
+
+
 def display_url_results():
     """Display saved URL processing results with download and process another buttons"""
     if 'last_result' in st.session_state and st.session_state.last_result:
@@ -912,6 +1035,8 @@ def display_url_results():
         if st.button("📝 Process Another", use_container_width=True, key="process_another_url"):
             # Clear ALL session state for inputs
             st.session_state.last_result = None
+            st.session_state.chat_history = []  # Clear chat history
+            st.session_state.chat_context = {}  # Clear chat context
             st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
             st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
             st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
@@ -919,6 +1044,10 @@ def display_url_results():
 
         # Display the summary content below
         st.markdown(content)
+
+        # Chat section
+        output_file = st.session_state.last_result.get('output_file')
+        render_chat_section(content, title, output_file)
 
 
 def process_file(uploaded_file, words):
@@ -1215,7 +1344,8 @@ except Exception as e:
                     # Save to session state for persistent display
                     st.session_state.file_result = {
                         'content': md_content,
-                        'filename': uploaded_file.name
+                        'filename': uploaded_file.name,
+                        'output_file': saved_path  # Full path for chat Q&A persistence
                     }
 
                     # Determine content type
@@ -1396,7 +1526,8 @@ except Exception as e:
                     # Save to session state for persistent display
                     st.session_state.text_result = {
                         'content': md_content,
-                        'filename': 'pasted_content.md'
+                        'filename': 'pasted_content.md',
+                        'output_file': saved_path  # Full path for chat Q&A persistence
                     }
 
                     # Extract title from markdown content
@@ -1468,6 +1599,8 @@ if 'file_result' in st.session_state and st.session_state.file_result:
     if st.button("📝 Process Another", use_container_width=True, key="process_another_file"):
         # Clear ALL session state for inputs
         st.session_state.file_result = None
+        st.session_state.chat_history = []  # Clear chat history
+        st.session_state.chat_context = {}  # Clear chat context
         st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
@@ -1475,6 +1608,10 @@ if 'file_result' in st.session_state and st.session_state.file_result:
 
     # Display the summary content below
     st.markdown(content)
+
+    # Chat section for file results
+    output_file = st.session_state.file_result.get('output_file')
+    render_chat_section(content, title, output_file)
 
 # Display text paste results
 if 'text_result' in st.session_state and st.session_state.text_result:
@@ -1494,6 +1631,8 @@ if 'text_result' in st.session_state and st.session_state.text_result:
     if st.button("📝 Process Another", use_container_width=True, key="process_another_text"):
         # Clear ALL session state for inputs
         st.session_state.text_result = None
+        st.session_state.chat_history = []  # Clear chat history
+        st.session_state.chat_context = {}  # Clear chat context
         st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
@@ -1501,3 +1640,7 @@ if 'text_result' in st.session_state and st.session_state.text_result:
 
     # Display the summary content below
     st.markdown(content)
+
+    # Chat section for text results
+    output_file = st.session_state.text_result.get('output_file')
+    render_chat_section(content, title, output_file)
