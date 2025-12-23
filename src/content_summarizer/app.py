@@ -206,23 +206,42 @@ apply_dark_mode()
 # Add info box
 st.info("✨ **Supports YouTube videos, podcasts, articles, files, and text** • AI-powered summaries with key takeaways")
 
-# Add keyboard shortcut (Ctrl/Cmd + Enter) to trigger summarize button
+# Keyboard shortcut (Ctrl/Cmd + Enter) using URL params
+# JavaScript sets a query param, Python detects it and triggers summarization
 components.html("""
 <script>
-document.addEventListener('keydown', function(e) {
-    // Check for Ctrl+Enter or Cmd+Enter
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        // Find the Summarize button by its text content
-        const buttons = parent.document.querySelectorAll('button');
-        for (const btn of buttons) {
-            if (btn.innerText.includes('Summarize')) {
-                btn.click();
-                e.preventDefault();
-                break;
+(function() {
+    if (window._shortcutReady) return;
+    window._shortcutReady = true;
+
+    // Listen on parent document (Streamlit main frame)
+    const doc = window.parent.document;
+    doc.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+
+            // Find and click the Summarize button
+            const btns = doc.querySelectorAll('button[data-testid="stBaseButton-primary"], button[kind="primary"]');
+            for (const btn of btns) {
+                if (btn.innerText && btn.innerText.includes('Summarize')) {
+                    btn.focus();
+                    btn.click();
+                    return;
+                }
+            }
+
+            // Fallback: try all buttons
+            const allBtns = doc.querySelectorAll('button');
+            for (const btn of allBtns) {
+                if (btn.innerText && btn.innerText.includes('Summarize')) {
+                    btn.focus();
+                    btn.click();
+                    return;
+                }
             }
         }
-    }
-});
+    }, true);
+})();
 </script>
 """, height=0)
 
