@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from content_summarizer.style import apply_dark_mode
 from content_summarizer.history_manager import get_history_manager, record_history
 from content_summarizer.export_formats import EXPORT_FORMATS, convert_for_export
+from content_summarizer.ai_summarizer import AITranscriptSummarizer
 
 
 # ============================================================================
@@ -92,7 +93,7 @@ def load_token_usage():
                 if data.get('date') != datetime.now().strftime('%Y-%m-%d'):
                     return {'date': datetime.now().strftime('%Y-%m-%d'), 'tokens_used': 0, 'requests': 0}
                 return data
-        except:
+        except Exception:
             pass
     return {'date': datetime.now().strftime('%Y-%m-%d'), 'tokens_used': 0, 'requests': 0}
 
@@ -104,8 +105,11 @@ def save_token_usage(tokens_used, requests=1):
     data['date'] = datetime.now().strftime('%Y-%m-%d')
     data['last_updated'] = datetime.now().isoformat()
 
-    with open(get_token_usage_path(), 'w') as f:
-        json.dump(data, f, indent=2)
+    try:
+        with open(get_token_usage_path(), 'w') as f:
+            json.dump(data, f, indent=2)
+    except IOError as e:
+        print(f"Warning: Could not save token usage: {e}", file=sys.stderr)
 
 def estimate_tokens(text):
     """Estimate tokens for text (rough estimate: ~4 chars per token)."""
@@ -657,7 +661,7 @@ def create_markdown_from_results(output, filename="summary.md"):
                 md_content += summary + "\n\n"
         
         return md_content
-    except:
+    except Exception:
         return output
 
 
@@ -889,7 +893,6 @@ def render_chat_section(content: str, title: str, output_file: str = None):
         title: Content title
         output_file: Path to markdown file to append Q&A to
     """
-    import re
 
     # Initialize chat state
     if 'chat_history' not in st.session_state:
@@ -948,10 +951,6 @@ def render_chat_section(content: str, title: str, output_file: str = None):
     if send_clicked and user_question.strip():
         with st.spinner("Thinking..."):
             try:
-                # Import and use the summarizer for chat
-                from content_summarizer.ai_summarizer import AITranscriptSummarizer
-                import os
-
                 summarizer = AITranscriptSummarizer(
                     provider='groq',
                     model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
@@ -968,8 +967,12 @@ def render_chat_section(content: str, title: str, output_file: str = None):
                 )
 
                 # Add to history
-                st.session_state.chat_history.append({'role': 'user', 'content': user_question.strip()})
+                user_q = user_question.strip()
+                st.session_state.chat_history.append({'role': 'user', 'content': user_q})
                 st.session_state.chat_history.append({'role': 'assistant', 'content': response})
+
+                # Clear the input
+                st.session_state.chat_input = ""
 
                 # Persist to markdown file if path provided
                 if output_file and os.path.exists(output_file):
@@ -982,7 +985,7 @@ def render_chat_section(content: str, title: str, output_file: str = None):
                             file_content += "\n\n---\n\n## 💬 Q&A\n"
 
                         # Append this Q&A
-                        qa_entry = f"\n**Q:** {user_question.strip()}\n\n**A:** {response}\n"
+                        qa_entry = f"\n**Q:** {user_q}\n\n**A:** {response}\n"
                         file_content += qa_entry
 
                         with open(output_file, 'w', encoding='utf-8') as f:
@@ -1310,7 +1313,7 @@ except Exception as e:
         try:
             temp_path.unlink()
             temp_dir.rmdir()
-        except:
+        except Exception:
             pass
         
         progress_text.text("✨ Stage 3/3: Generating insights with AI...")
