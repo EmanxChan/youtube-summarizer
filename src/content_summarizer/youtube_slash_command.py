@@ -2971,10 +2971,20 @@ def fetch_transcript(video_id):
                 
             except Exception as e:
                 raise Exception(f"Alternative method failed: {e}")
-                
+
         except TranscriptsDisabled:
+            # Try yt-dlp fallback before giving up
+            print("Transcripts marked as disabled, trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript
             raise Exception("Transcripts are disabled for this video")
         except NoTranscriptFound:
+            # Try yt-dlp fallback before giving up
+            print("No transcript found via API, trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript
             raise Exception("No transcript found for this video (may not have captions)")
         except Exception as e:
             error_str = str(e)
@@ -2993,14 +3003,14 @@ def fetch_transcript(video_id):
                     if fallback_transcript:
                         return fallback_transcript
                     raise Exception("Rate limited: All methods exhausted. Try again later or use VPN.")
-            
+
             # For other errors (like XML parsing), try yt-dlp fallback immediately
             print(f"Primary method failed ({error_str}), trying yt-dlp fallback...", file=sys.stderr)
             fallback_transcript = fetch_transcript_ytdlp(video_id)
             if fallback_transcript:
                 return fallback_transcript
             raise Exception(f"Error fetching transcript: {e}")
-    
+
     raise Exception("Failed to fetch transcript after multiple retries")
 
 
@@ -3049,8 +3059,18 @@ def fetch_transcript_with_timestamps(video_id):
                 raise Exception(f"Alternative method failed: {e}")
 
         except TranscriptsDisabled:
+            # Try yt-dlp fallback before giving up
+            print("Transcripts marked as disabled, trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript, None  # No timestamps from yt-dlp
             raise Exception("Transcripts are disabled for this video")
         except NoTranscriptFound:
+            # Try yt-dlp fallback before giving up
+            print("No transcript found via API, trying yt-dlp fallback...", file=sys.stderr)
+            fallback_transcript = fetch_transcript_ytdlp(video_id)
+            if fallback_transcript:
+                return fallback_transcript, None  # No timestamps from yt-dlp
             raise Exception("No transcript found for this video (may not have captions)")
         except Exception as e:
             error_str = str(e)
