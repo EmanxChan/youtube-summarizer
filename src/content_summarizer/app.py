@@ -884,7 +884,7 @@ def render_export_button_row(content: str, base_filename: str, metadata: dict, k
     st.markdown("---")
 
 
-def render_chat_section(content: str, title: str, output_file: str = None):
+def render_chat_section(content: str, title: str, output_file: str = None, tab_key: str = "default"):
     """
     Render the chat interface for asking questions about the content.
 
@@ -892,13 +892,25 @@ def render_chat_section(content: str, title: str, output_file: str = None):
         content: The full markdown content (to extract summary/takeaways/transcript)
         title: Content title
         output_file: Path to markdown file to append Q&A to
+        tab_key: Unique key for this tab to isolate widget keys and state
     """
+    # Tab-specific state keys
+    history_key = f'chat_history_{tab_key}'
+    context_key = f'chat_context_{tab_key}'
+    input_key = f'chat_input_{tab_key}'
+    send_key = f'send_chat_{tab_key}'
+    clear_key = f'clear_chat_{tab_key}'
 
-    # Initialize chat state
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    if 'chat_context' not in st.session_state:
-        st.session_state.chat_context = {}
+    # Initialize chat state for this tab
+    if history_key not in st.session_state:
+        st.session_state[history_key] = []
+    if context_key not in st.session_state:
+        st.session_state[context_key] = {}
+
+    # Validate content
+    if not content or not content.strip():
+        st.warning("No content available for chat.")
+        return
 
     # Parse context from content
     summary_match = re.search(r'## 📝 Executive Summary\s+(.+?)(?=\n##|\n---|\Z)', content, re.DOTALL)
@@ -912,8 +924,8 @@ def render_chat_section(content: str, title: str, output_file: str = None):
     transcript_match = re.search(r'## (?:📜 )?(?:Full )?Transcript\s+(.+?)(?=\n##|\n---|\Z)', content, re.DOTALL | re.IGNORECASE)
     transcript = transcript_match.group(1).strip() if transcript_match else content  # Fall back to full content
 
-    # Store context
-    st.session_state.chat_context = {
+    # Store context for this tab
+    st.session_state[context_key] = {
         'summary': summary,
         'takeaways': takeaways,
         'transcript': transcript,
@@ -926,14 +938,20 @@ def render_chat_section(content: str, title: str, output_file: str = None):
     st.markdown("### 💬 Ask About This Content")
     st.caption("Ask questions about the content and get AI-powered answers based on the summary and transcript.")
 
-    # Display chat history
+    # Display chat history for this tab
     chat_container = st.container()
     with chat_container:
-        for msg in st.session_state.chat_history:
+        for msg in st.session_state[history_key]:
             if msg['role'] == 'user':
                 st.markdown(f"**You:** {msg['content']}")
             else:
                 st.markdown(f"**AI:** {msg['content']}")
+
+    # Check API key availability
+    api_key = os.getenv('GROQ_API_KEY', '')
+    if not api_key:
+        st.warning("⚠️ GROQ_API_KEY not configured. Chat feature requires an API key.")
+        return
 
     # Chat input
     col1, col2 = st.columns([5, 1])
@@ -942,10 +960,10 @@ def render_chat_section(content: str, title: str, output_file: str = None):
             "Your question",
             placeholder="What tools were mentioned? What's the main takeaway? etc.",
             label_visibility="collapsed",
-            key="chat_input"
+            key=input_key
         )
     with col2:
-        send_clicked = st.button("Send", type="primary", use_container_width=True, key="send_chat")
+        send_clicked = st.button("Send", type="primary", use_container_width=True, key=send_key)
 
     # Handle send
     if send_clicked and user_question.strip():
@@ -956,23 +974,23 @@ def render_chat_section(content: str, title: str, output_file: str = None):
                     model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
                 )
 
-                ctx = st.session_state.chat_context
+                ctx = st.session_state[context_key]
                 response = summarizer.generate_chat_response(
                     question=user_question.strip(),
                     transcript=ctx.get('transcript', ''),
                     summary=ctx.get('summary', ''),
                     takeaways=ctx.get('takeaways', []),
                     title=ctx.get('title', 'Content'),
-                    chat_history=st.session_state.chat_history
+                    chat_history=st.session_state[history_key]
                 )
 
-                # Add to history
+                # Add to history for this tab
                 user_q = user_question.strip()
-                st.session_state.chat_history.append({'role': 'user', 'content': user_q})
-                st.session_state.chat_history.append({'role': 'assistant', 'content': response})
+                st.session_state[history_key].append({'role': 'user', 'content': user_q})
+                st.session_state[history_key].append({'role': 'assistant', 'content': response})
 
                 # Clear the input
-                st.session_state.chat_input = ""
+                st.session_state[input_key] = ""
 
                 # Persist to markdown file if path provided
                 if output_file and os.path.exists(output_file):
@@ -996,12 +1014,18 @@ def render_chat_section(content: str, title: str, output_file: str = None):
                 st.rerun()
 
             except Exception as e:
-                st.error(f"Error generating response: {e}")
+                error_msg = str(e)
+                if "rate limit" in error_msg.lower():
+                    st.error("⏳ Rate limit reached. Please wait a moment and try again.")
+                elif "api key" in error_msg.lower() or "authentication" in error_msg.lower():
+                    st.error("🔑 API key error. Please check your GROQ_API_KEY configuration.")
+                else:
+                    st.error(f"Error generating response: {error_msg}")
 
-    # Clear chat button
-    if st.session_state.chat_history:
-        if st.button("🗑️ Clear Chat", key="clear_chat"):
-            st.session_state.chat_history = []
+    # Clear chat button for this tab
+    if st.session_state[history_key]:
+        if st.button("🗑️ Clear Chat", key=clear_key):
+            st.session_state[history_key] = []
             st.rerun()
 
 
@@ -1038,8 +1062,8 @@ def display_url_results():
         if st.button("📝 Process Another", use_container_width=True, key="process_another_url"):
             # Clear ALL session state for inputs
             st.session_state.last_result = None
-            st.session_state.chat_history = []  # Clear chat history
-            st.session_state.chat_context = {}  # Clear chat context
+            st.session_state.chat_history_url = []  # Clear URL tab chat history
+            st.session_state.chat_context_url = {}  # Clear URL tab chat context
             st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
             st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
             st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
@@ -1050,7 +1074,7 @@ def display_url_results():
 
         # Chat section
         output_file = st.session_state.last_result.get('output_file')
-        render_chat_section(content, title, output_file)
+        render_chat_section(content, title, output_file, tab_key="url")
 
 
 def process_file(uploaded_file, words):
@@ -1602,8 +1626,8 @@ if 'file_result' in st.session_state and st.session_state.file_result:
     if st.button("📝 Process Another", use_container_width=True, key="process_another_file"):
         # Clear ALL session state for inputs
         st.session_state.file_result = None
-        st.session_state.chat_history = []  # Clear chat history
-        st.session_state.chat_context = {}  # Clear chat context
+        st.session_state.chat_history_file = []  # Clear file tab chat history
+        st.session_state.chat_context_file = {}  # Clear file tab chat context
         st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
@@ -1614,7 +1638,7 @@ if 'file_result' in st.session_state and st.session_state.file_result:
 
     # Chat section for file results
     output_file = st.session_state.file_result.get('output_file')
-    render_chat_section(content, title, output_file)
+    render_chat_section(content, title, output_file, tab_key="file")
 
 # Display text paste results
 if 'text_result' in st.session_state and st.session_state.text_result:
@@ -1634,8 +1658,8 @@ if 'text_result' in st.session_state and st.session_state.text_result:
     if st.button("📝 Process Another", use_container_width=True, key="process_another_text"):
         # Clear ALL session state for inputs
         st.session_state.text_result = None
-        st.session_state.chat_history = []  # Clear chat history
-        st.session_state.chat_context = {}  # Clear chat context
+        st.session_state.chat_history_text = []  # Clear text tab chat history
+        st.session_state.chat_context_text = {}  # Clear text tab chat context
         st.session_state.input_cleared = st.session_state.get('input_cleared', 0) + 1
         st.session_state.file_cleared = st.session_state.get('file_cleared', 0) + 1
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
@@ -1646,4 +1670,4 @@ if 'text_result' in st.session_state and st.session_state.text_result:
 
     # Chat section for text results
     output_file = st.session_state.text_result.get('output_file')
-    render_chat_section(content, title, output_file)
+    render_chat_section(content, title, output_file, tab_key="text")
