@@ -453,28 +453,42 @@ Return ONLY {count} insights, one per line. Format: EMOJI + space + insight."""
                         transcript[len(transcript)//2 - third//2:len(transcript)//2 + third//2] + \
                         " [...] " + transcript[-third:]
 
+        # Calculate words per paragraph for guidance
         words_per_paragraph = word_count // 4
-        prompt = f"""Title: {video_title}
-Content: {transcript}
 
-Create an executive summary (~{word_count} words) in four paragraphs:
+        prompt = f"""You are an expert at creating executive summaries for educational and technical content.
 
-1. **Introduction** (~{words_per_paragraph} words): What this covers and why it matters.
+Video Title: {video_title}
+Transcript: {transcript}
 
-2. **Core Themes** (~{words_per_paragraph} words): The 3-4 main concepts or arguments.
+Create an executive summary that delivers AT LEAST {word_count} words in four cohesive paragraphs (approximately {words_per_paragraph} words per paragraph). Do not stop early; add detail until the minimum word count is reached.
 
-3. **Practical Applications** (~{words_per_paragraph} words): Real-world applications and implications.
+Structure your summary with these four paragraphs:
 
-4. **Recommendation** (~{words_per_paragraph} words): Who benefits and what they'll gain.
+1. **Introduction** (~{words_per_paragraph} words): Open with what this content teaches and why it matters. Provide context and the core value proposition.
 
-Professional language. Focus on value, not play-by-play."""
+2. **Core Themes** (~{words_per_paragraph} words): Explain the 3-4 main concepts, techniques, or arguments covered. Add supporting details and examples to reach the target length.
+
+3. **Practical Applications** (~{words_per_paragraph} words): Describe the practical applications, benefits, and real-world implications. Include specific use cases or outcomes.
+
+4. **Closing Recommendation** (~{words_per_paragraph} words): Conclude with who would benefit most from this content and what they will gain. Summarize the key value.
+
+CRITICAL REQUIREMENTS:
+- Write AT LEAST {word_count} words total - do not stop short
+- Use four cohesive paragraphs with smooth transitions
+- Focus on concepts and value, NOT play-by-play actions
+- Do not mention "the video" or "the speaker" - write as if describing the topic directly
+- Use clear, professional language with sufficient detail to reach the word count
+- Make it informative enough that someone could decide whether to watch based on your summary
+
+Return ONLY the summary text with paragraph breaks, no headers or labels."""
 
         try:
             if self.provider == "groq":
                 # Use fallback-aware method for Groq
                 content = self._groq_api_call_with_fallback(
                     messages=[
-                        {"role": "system", "content": "You are an expert technical writer."},
+                        {"role": "system", "content": "You are an expert at creating executive summaries for educational and technical content."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.7,
@@ -486,7 +500,7 @@ Professional language. Focus on value, not play-by-play."""
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": "You are an expert technical writer."},
+                        {"role": "system", "content": "You are an expert at creating executive summaries for educational and technical content."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.7,
