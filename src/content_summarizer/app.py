@@ -900,6 +900,7 @@ def render_chat_section(content: str, title: str, output_file: str = None, tab_k
     input_key = f'chat_input_{tab_key}'
     send_key = f'send_chat_{tab_key}'
     clear_key = f'clear_chat_{tab_key}'
+    clear_input_flag = f'clear_chat_input_{tab_key}'
 
     # Initialize chat state for this tab
     if history_key not in st.session_state:
@@ -953,7 +954,12 @@ def render_chat_section(content: str, title: str, output_file: str = None, tab_k
         st.warning("⚠️ GROQ_API_KEY not configured. Chat feature requires an API key.")
         return
 
-    # Chat input
+    # Chat input - clear if flagged from previous send
+    if st.session_state.get(clear_input_flag, False):
+        st.session_state[clear_input_flag] = False
+        if input_key in st.session_state:
+            del st.session_state[input_key]
+
     col1, col2 = st.columns([5, 1])
     with col1:
         user_question = st.text_input(
@@ -989,8 +995,8 @@ def render_chat_section(content: str, title: str, output_file: str = None, tab_k
                 st.session_state[history_key].append({'role': 'user', 'content': user_q})
                 st.session_state[history_key].append({'role': 'assistant', 'content': response})
 
-                # Clear the input
-                st.session_state[input_key] = ""
+                # Set flag to clear input on next render
+                st.session_state[clear_input_flag] = True
 
                 # Persist to markdown file if path provided
                 if output_file and os.path.exists(output_file):
