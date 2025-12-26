@@ -343,10 +343,12 @@ REQUIREMENTS:
 2. Reveal WHY something works, not just WHAT
 3. Be non-obvious and memorable
 4. Use 25-35 words per insight
+5. Use **bold** for the key concept or term in each insight (1-2 bold phrases per insight)
+6. Use <mark>highlight</mark> for the most actionable or memorable phrase (only if truly important)
 
-AVOID: Generic truisms, obvious statements, vague platitudes.
+AVOID: Generic truisms, obvious statements, vague platitudes, over-formatting.
 
-Return ONLY {count} insights, one per line. Format: EMOJI + space + insight."""
+Return ONLY {count} insights, one per line. Format: EMOJI + space + insight with formatting."""
 
         try:
             if self.provider == "groq":
@@ -480,6 +482,11 @@ CRITICAL REQUIREMENTS:
 - Do not mention "the video" or "the speaker" - write as if describing the topic directly
 - Use clear, professional language with sufficient detail to reach the word count
 - Make it informative enough that someone could decide whether to watch based on your summary
+
+FORMATTING REQUIREMENTS:
+- Use **bold** for key concepts, important terms, and critical phrases (3-5 per paragraph)
+- Use <mark>highlight</mark> tags for the most important insights or actionable takeaways (1-2 per paragraph)
+- Do NOT overuse formatting - be selective to emphasize what truly matters
 
 Return ONLY the summary text with paragraph breaks, no headers or labels."""
 
