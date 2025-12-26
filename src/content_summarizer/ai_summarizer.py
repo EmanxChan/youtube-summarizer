@@ -17,7 +17,6 @@ import tiktoken
 # Groq model fallback chain (largest to smallest)
 GROQ_MODEL_FALLBACK_CHAIN = [
     "llama-3.3-70b-versatile",      # Best quality, highest token usage
-    "llama-3.1-70b-versatile",      # Fallback large model
     "llama-3.1-8b-instant",         # Fast, low token usage
     "llama-3.2-3b-preview",         # Smallest, emergency fallback
 ]

@@ -71,7 +71,6 @@ def copy_to_clipboard(text: str, key: str):
 
 GROQ_DAILY_TOKEN_LIMITS = {
     "llama-3.3-70b-versatile": 100_000,
-    "llama-3.1-70b-versatile": 100_000,
     "llama-3.1-8b-instant": 500_000,
     "llama-3.2-3b-preview": 500_000,
 }
