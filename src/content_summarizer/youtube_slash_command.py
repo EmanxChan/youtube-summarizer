@@ -3993,7 +3993,7 @@ def handle_youtube_command(args):
 
     # Format transcript with bold/highlights if AI available
     formatted_content = content_text
-    if ai_summarizer and not skip_summary:
+    if ai_summarizer:
         print("Formatting transcript with highlights...")
         cache_params = {'title': content_title or "Content"}
         cached_formatted = get_cached_ai_response(content_text, 'formatted_transcript', cache_params)
