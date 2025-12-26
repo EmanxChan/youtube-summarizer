@@ -3991,6 +3991,31 @@ def handle_youtube_command(args):
                 save_ai_response(content_text, 'highlights', cache_params, highlights)
                 print(f"✓ Generated {len(highlights)} highlights")
 
+    # Format transcript with bold/highlights if AI available
+    formatted_content = content_text
+    if ai_summarizer and not skip_summary:
+        print("Formatting transcript with highlights...")
+        cache_params = {'title': content_title or "Content"}
+        cached_formatted = get_cached_ai_response(content_text, 'formatted_transcript', cache_params)
+
+        if cached_formatted:
+            formatted_content = cached_formatted
+            print("✓ Using cached formatted transcript")
+        else:
+            try:
+                formatted_content = ai_summarizer.format_transcript(
+                    content_text, content_title or "Content"
+                )
+                if formatted_content and formatted_content != content_text:
+                    save_ai_response(content_text, 'formatted_transcript', cache_params, formatted_content)
+                    print("✓ Transcript formatted with bold and highlights")
+                else:
+                    formatted_content = content_text
+                    print("⚠ Transcript formatting skipped")
+            except Exception as e:
+                print(f"⚠ Transcript formatting failed: {e}")
+                formatted_content = content_text
+
     # Save files based on format
     if output_format == 'md':
         # Save as single markdown file
@@ -3999,7 +4024,7 @@ def handle_youtube_command(args):
             source_url=source_url,
             summary=summary,
             takeaways=takeaways,
-            full_text=content_text,
+            full_text=formatted_content,
             content_label=content_label,
             source_id=source_id,
             next_steps=next_steps,

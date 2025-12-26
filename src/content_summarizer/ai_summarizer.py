@@ -481,6 +481,11 @@ CRITICAL REQUIREMENTS:
 - Use clear, professional language with sufficient detail to reach the word count
 - Make it informative enough that someone could decide whether to watch based on your summary
 
+FORMATTING REQUIREMENTS:
+- Use **bold** for key concepts, important terms, and critical phrases (3-5 per paragraph)
+- Use <mark>highlight</mark> tags for the most important insights or actionable takeaways (1-2 per paragraph)
+- Do NOT overuse formatting - be selective to emphasize what truly matters
+
 Return ONLY the summary text with paragraph breaks, no headers or labels."""
 
         try:
@@ -538,6 +543,117 @@ Return ONLY the summary text with paragraph breaks, no headers or labels."""
         except Exception as e:
             print(f"Error generating summary: {e}", file=sys.stderr)
             return ""
+
+    def format_transcript(self, transcript: str, title: str = "Content") -> str:
+        """
+        Format a transcript with bold key phrases and highlighted important statements.
+
+        Args:
+            transcript: The raw transcript text
+            title: Content title for context
+
+        Returns:
+            Formatted transcript with **bold** and <mark>highlight</mark> tags
+        """
+        # Process in chunks to handle long transcripts
+        max_chars_per_chunk = 3000  # ~750 tokens per chunk
+        words = transcript.split()
+
+        # If transcript is short enough, process in one go
+        if len(transcript) <= max_chars_per_chunk:
+            return self._format_transcript_chunk(transcript, title)
+
+        # Split into paragraphs first, then chunk
+        paragraphs = transcript.split('\n\n')
+        if len(paragraphs) == 1:
+            # No paragraph breaks, split by sentences
+            paragraphs = transcript.replace('. ', '.\n\n').split('\n\n')
+
+        formatted_chunks = []
+        current_chunk = []
+        current_length = 0
+
+        for para in paragraphs:
+            para_length = len(para)
+            if current_length + para_length > max_chars_per_chunk and current_chunk:
+                # Process current chunk
+                chunk_text = '\n\n'.join(current_chunk)
+                formatted = self._format_transcript_chunk(chunk_text, title)
+                formatted_chunks.append(formatted)
+                current_chunk = [para]
+                current_length = para_length
+            else:
+                current_chunk.append(para)
+                current_length += para_length
+
+        # Process remaining chunk
+        if current_chunk:
+            chunk_text = '\n\n'.join(current_chunk)
+            formatted = self._format_transcript_chunk(chunk_text, title)
+            formatted_chunks.append(formatted)
+
+        return '\n\n'.join(formatted_chunks)
+
+    def _format_transcript_chunk(self, chunk: str, title: str) -> str:
+        """Format a single chunk of transcript text."""
+        prompt = f"""You are an expert editor enhancing transcript readability.
+
+Title: {title}
+Transcript chunk:
+{chunk}
+
+Enhance this transcript with formatting:
+1. Use **bold** for key terms, concepts, names, and important phrases (5-10 per chunk)
+2. Use <mark>highlight</mark> for the most impactful statements or insights (1-3 per chunk)
+
+RULES:
+- Keep ALL original text - do not summarize or remove anything
+- Only ADD formatting, never change words
+- Be selective - don't over-format
+- Preserve paragraph structure
+- Return the COMPLETE formatted text
+
+Return ONLY the formatted transcript, no explanations."""
+
+        try:
+            if self.provider == "groq":
+                content = self._groq_api_call_with_fallback(
+                    messages=[
+                        {"role": "system", "content": "You are an expert editor. Format text exactly as instructed, preserving all content."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,  # Low temperature for consistent formatting
+                    max_tokens=len(chunk) + 500  # Buffer for added formatting
+                )
+                return content.strip()
+
+            elif self.provider in ["openai", "deepseek"]:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert editor. Format text exactly as instructed, preserving all content."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=len(chunk) + 500
+                )
+                return response.choices[0].message.content.strip()
+
+            elif self.provider == "anthropic":
+                response = self.client.messages.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=len(chunk) + 500,
+                    temperature=0.3
+                )
+                return response.content[0].text.strip()
+
+            else:
+                return chunk  # Return unformatted if provider not supported
+
+        except Exception as e:
+            print(f"Error formatting transcript chunk: {e}", file=sys.stderr)
+            return chunk  # Return original on error
 
     def generate_chat_response(self, question: str, transcript: str,
                                 summary: str, takeaways: List[str],

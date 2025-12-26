@@ -32,6 +32,10 @@ def markdown_to_plain_text(markdown_content: str) -> str:
     text = re.sub(r'__(.+?)__', r'\1', text)
     text = re.sub(r'_(.+?)_', r'\1', text)
 
+    # Remove highlight/mark tags
+    text = re.sub(r'<mark>(.+?)</mark>', r'\1', text)
+    text = re.sub(r'</?mark>', '', text)
+
     # Remove inline code
     text = re.sub(r'`(.+?)`', r'\1', text)
 
@@ -201,6 +205,7 @@ def _markdown_to_pdf_reportlab(markdown_content: str, title: str = "Summary") ->
         # Clean markdown formatting for PDF
         clean_line = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', line)
         clean_line = re.sub(r'\*(.+?)\*', r'<i>\1</i>', clean_line)
+        clean_line = re.sub(r'<mark>(.+?)</mark>', r'<font backColor="yellow">\1</font>', clean_line)  # Highlights
         clean_line = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean_line)
 
         if line.startswith('# '):
@@ -327,6 +332,7 @@ def markdown_to_pdf(markdown_content: str, title: str = "Summary") -> bytes:
             # Clean markdown formatting
             text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
             text = re.sub(r'\*(.+?)\*', r'\1', text)
+            text = re.sub(r'<mark>(.+?)</mark>', r'[\1]', text)  # Convert highlights to brackets
             text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
             pdf.multi_cell(0, 6, text)
             continue
@@ -339,6 +345,7 @@ def markdown_to_pdf(markdown_content: str, title: str = "Summary") -> bytes:
             # Clean markdown formatting
             text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
             text = re.sub(r'\*(.+?)\*', r'\1', text)
+            text = re.sub(r'<mark>(.+?)</mark>', r'[\1]', text)  # Convert highlights to brackets
             text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
             pdf.multi_cell(0, 6, text)
             continue
@@ -358,6 +365,7 @@ def markdown_to_pdf(markdown_content: str, title: str = "Summary") -> bytes:
             pdf.set_text_color(80, 80, 80)
             # Clean markdown
             text = re.sub(r'\*\*(.+?)\*\*', r'\1', line)
+            text = re.sub(r'<mark>(.+?)</mark>', r'[\1]', text)  # Convert highlights to brackets
             text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
             pdf.multi_cell(0, 6, text)
             continue
@@ -368,6 +376,7 @@ def markdown_to_pdf(markdown_content: str, title: str = "Summary") -> bytes:
         # Clean markdown formatting
         text = re.sub(r'\*\*(.+?)\*\*', r'\1', line)
         text = re.sub(r'\*(.+?)\*', r'\1', line)
+        text = re.sub(r'<mark>(.+?)</mark>', r'[\1]', text)  # Convert highlights to brackets
         text = re.sub(r'`(.+?)`', r'\1', text)
         text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
         pdf.multi_cell(0, 6, text)
