@@ -343,12 +343,10 @@ REQUIREMENTS:
 2. Reveal WHY something works, not just WHAT
 3. Be non-obvious and memorable
 4. Use 25-35 words per insight
-5. Use **bold** for the key concept or term in each insight (1-2 bold phrases per insight)
-6. Use <mark>highlight</mark> for the most actionable or memorable phrase (only if truly important)
 
-AVOID: Generic truisms, obvious statements, vague platitudes, over-formatting.
+AVOID: Generic truisms, obvious statements, vague platitudes.
 
-Return ONLY {count} insights, one per line. Format: EMOJI + space + insight with formatting."""
+Return ONLY {count} insights, one per line. Format: EMOJI + space + insight."""
 
         try:
             if self.provider == "groq":
