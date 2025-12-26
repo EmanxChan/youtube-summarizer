@@ -76,6 +76,20 @@ GROQ_DAILY_TOKEN_LIMITS = {
     "llama-3.2-3b-preview": 500_000,
 }
 
+def render_markdown_with_highlights(content: str):
+    """
+    Render markdown content with highlight support in Streamlit.
+    Converts <mark> tags to styled spans for proper rendering.
+    """
+    # Convert <mark> to styled spans with yellow background
+    styled_content = content.replace(
+        '<mark>',
+        '<span style="background-color: #fff3cd; padding: 1px 4px; border-radius: 3px;">'
+    )
+    styled_content = styled_content.replace('</mark>', '</span>')
+    st.markdown(styled_content, unsafe_allow_html=True)
+
+
 def get_token_usage_path():
     """Get path to token usage tracking file."""
     usage_dir = Path.home() / '.youtube_summarizer'
@@ -1065,8 +1079,8 @@ def display_url_results():
             st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
             st.rerun()
 
-        # Display the summary content below
-        st.markdown(content)
+        # Display the summary content below (with highlight support)
+        render_markdown_with_highlights(content)
 
         # Chat section
         output_file = st.session_state.last_result.get('output_file')
@@ -1629,8 +1643,8 @@ if 'file_result' in st.session_state and st.session_state.file_result:
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
 
-    # Display the summary content below
-    st.markdown(content)
+    # Display the summary content below (with highlight support)
+    render_markdown_with_highlights(content)
 
     # Chat section for file results
     output_file = st.session_state.file_result.get('output_file')
@@ -1661,8 +1675,8 @@ if 'text_result' in st.session_state and st.session_state.text_result:
         st.session_state.text_cleared = st.session_state.get('text_cleared', 0) + 1
         st.rerun()
 
-    # Display the summary content below
-    st.markdown(content)
+    # Display the summary content below (with highlight support)
+    render_markdown_with_highlights(content)
 
     # Chat section for text results
     output_file = st.session_state.text_result.get('output_file')
