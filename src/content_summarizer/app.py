@@ -345,10 +345,10 @@ with tab_podcast:
 
 with tab_article:
     st.markdown("### Article or Webpage")
-    st.caption("Enter any article, blog post, or webpage URL")
+    st.caption("Enter any article, blog post, webpage, or **X/Twitter post** URL")
     article_url = st.text_input(
         "Article URL",
-        placeholder="https://example.com/article",
+        placeholder="https://example.com/article or https://x.com/user/status/...",
         label_visibility="collapsed",
         key=f"article_input_{input_counter}"
     )
@@ -356,7 +356,14 @@ with tab_article:
     if article_url:
         input_type = "url"
         content = article_url
-        st.success("✓ Article URL detected")
+        # Detect X/Twitter articles
+        if "x.com" in article_url or "twitter.com" in article_url:
+            if "/status/" in article_url:
+                st.success("✓ X/Twitter article detected")
+            else:
+                st.info("ℹ️ X URL detected - will attempt to fetch content")
+        else:
+            st.success("✓ Article URL detected")
 
 with tab_upload:
     st.markdown("### Upload Audio, Video, or PDF")
