@@ -49,6 +49,7 @@ class ContentType(Enum):
     PODCAST_SEARCH = "podcast_search"
     TWITTER_VIDEO = "twitter_video"
     DIRECT_AUDIO = "direct_audio"  # Direct .mp3, .m4a, .wav, .ogg URLs
+    X_ARTICLE = "x_article"  # X/Twitter long-form articles and text posts
 
 
 class NLTKHelper:
@@ -144,19 +145,184 @@ def is_direct_audio_url(url):
     return False
 
 
+def is_x_article_url(url):
+    """
+    Check if URL is an X/Twitter article or long-form text post (not a video).
+
+    X Articles are typically:
+    - Posts with the /status/ pattern that contain substantial text
+    - The new "Articles" feature on X
+
+    We distinguish from TWITTER_VIDEO by checking for video indicators.
+    For now, we route all X status URLs through this path and let the
+    content fetcher determine if it's worth summarizing.
+
+    Args:
+        url: URL to check
+
+    Returns:
+        bool: True if this appears to be an X article/text post
+    """
+    url_lower = url.lower()
+
+    # Must be X/Twitter domain
+    if not ("twitter.com" in url_lower or "x.com" in url_lower):
+        return False
+
+    # Must have /status/ pattern (regular posts)
+    # Note: /i/broadcasts/ are live streams, handled by TWITTER_VIDEO
+    if "/status/" in url_lower:
+        return True
+
+    return False
+
+
+def fetch_x_article_content(url, max_retries=2):
+    """
+    Fetch article content from X/Twitter using Jina Reader with fallback chain.
+
+    Fallback chain:
+    1. Jina Reader (r.jina.ai) - handles JS rendering, returns clean markdown
+    2. Direct scraping with cloudscraper - may work for some X pages
+    3. Raise error with guidance to use Text tab
+
+    Args:
+        url: X/Twitter URL to fetch
+        max_retries: Max retries per method (default 2)
+
+    Returns:
+        tuple: (title, cleaned_text)
+
+    Raises:
+        ValueError: If content cannot be extracted
+        ConnectionError: If all methods fail
+    """
+    import time
+    import os
+
+    errors = []
+
+    # ==========================================================================
+    # Method 1: Jina Reader (Primary - best for JS-heavy sites like X)
+    # ==========================================================================
+    print("  📖 Fetching X article via Jina Reader...")
+
+    jina_api_key = os.environ.get('JINA_API_KEY', '')
+    jina_url = f"https://r.jina.ai/{url}"
+
+    for attempt in range(max_retries):
+        try:
+            headers = {
+                'Accept': 'text/plain',
+                'User-Agent': 'ContentSummarizer/1.0'
+            }
+
+            # Add API key if available (higher rate limits)
+            if jina_api_key:
+                headers['Authorization'] = f'Bearer {jina_api_key}'
+
+            response = requests.get(jina_url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                content = response.text.strip()
+
+                # Jina returns markdown - extract title and content
+                lines = content.split('\n')
+                title = "X Post"
+                text_lines = []
+
+                for line in lines:
+                    # Jina often returns title as first # heading
+                    if line.startswith('# ') and title == "X Post":
+                        title = line[2:].strip()
+                    elif line.startswith('Title: ') and title == "X Post":
+                        title = line[7:].strip()
+                    else:
+                        text_lines.append(line)
+
+                full_text = '\n'.join(text_lines).strip()
+
+                # Validate we got meaningful content
+                if len(full_text) >= 100:
+                    print(f"  ✓ Jina Reader success ({len(full_text)} chars)")
+                    return (title, full_text)
+                else:
+                    errors.append(f"Jina returned too little content ({len(full_text)} chars)")
+
+            elif response.status_code == 429:
+                # Rate limited - wait and retry or move to fallback
+                errors.append(f"Jina rate limited (429)")
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + 1
+                    print(f"  ⏳ Rate limited, waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+            else:
+                errors.append(f"Jina returned status {response.status_code}")
+
+        except requests.exceptions.Timeout:
+            errors.append("Jina request timed out")
+        except Exception as e:
+            errors.append(f"Jina error: {str(e)[:100]}")
+
+        # Wait before retry
+        if attempt < max_retries - 1:
+            time.sleep(1)
+
+    # ==========================================================================
+    # Method 2: Direct scraping with cloudscraper (Fallback)
+    # ==========================================================================
+    print("  🔄 Jina failed, trying direct scraping...")
+
+    try:
+        # Try the existing fetch_article_content which uses cloudscraper
+        title, content = fetch_article_content(url, max_retries=2)
+
+        if len(content) >= 100:
+            print(f"  ✓ Direct scraping success ({len(content)} chars)")
+            return (title, content)
+        else:
+            errors.append(f"Direct scraping returned too little content ({len(content)} chars)")
+
+    except Exception as e:
+        errors.append(f"Direct scraping failed: {str(e)[:100]}")
+
+    # ==========================================================================
+    # Method 3: All methods failed - provide helpful error
+    # ==========================================================================
+    error_summary = "; ".join(errors[:3])  # First 3 errors
+
+    raise ConnectionError(
+        f"⚠️ Could not fetch X article content.\n\n"
+        f"Attempted methods:\n"
+        f"  1. Jina Reader (r.jina.ai)\n"
+        f"  2. Direct scraping\n\n"
+        f"Errors: {error_summary}\n\n"
+        f"💡 Workarounds:\n"
+        f"   1. Copy the post text and use the 'Text' tab to paste it\n"
+        f"   2. If the post has a video, it may work better in the YouTube tab\n"
+        f"   3. Try again later (X rate limits may be temporary)"
+    )
+
+
 def detect_content_type(query):
     """
     Detect whether query is a YouTube video, article, podcast URL, Twitter video,
-    direct audio file, or podcast search.
+    X article, direct audio file, or podcast search.
 
     Returns:
         tuple: (ContentType, identifier) where identifier is video_id, article_url,
-               podcast_url, twitter_url, audio_url, or search_query
+               podcast_url, twitter_url, x_article_url, audio_url, or search_query
     """
     # Check for Twitter/X patterns
     if "twitter.com" in query or "x.com" in query:
-        if "/status/" in query or "/i/broadcasts/" in query:
+        # Live broadcasts are video content
+        if "/i/broadcasts/" in query:
             return (ContentType.TWITTER_VIDEO, query)
+        # Regular posts (status) are treated as articles - use Jina Reader
+        # This handles tweets, threads, and X Articles feature
+        if "/status/" in query:
+            return (ContentType.X_ARTICLE, query)
 
     # Check for YouTube patterns (including live streams)
     if "youtube.com/watch" in query or "youtu.be/" in query or "youtube.com/live/" in query:
@@ -3624,6 +3790,9 @@ def handle_youtube_command(args):
     if content_type == ContentType.ARTICLE:
         print(f"Detected content type: article")
         print(f"Fetching article from: {identifier}...\n")
+    elif content_type == ContentType.X_ARTICLE:
+        print(f"Detected content type: X/Twitter article")
+        print(f"Fetching X article from: {identifier}...\n")
     elif content_type == ContentType.PODCAST:
         print(f"Detected content type: podcast (URL)")
     elif content_type == ContentType.PODCAST_SEARCH:
@@ -3631,7 +3800,7 @@ def handle_youtube_command(args):
     elif content_type == ContentType.DIRECT_AUDIO:
         print(f"Detected content type: direct audio file")
     elif content_type == ContentType.TWITTER_VIDEO:
-        print(f"Detected content type: Twitter/X video")
+        print(f"Detected content type: Twitter/X video (live broadcast)")
     else:
         print(f"Detected content type: video")
     
@@ -3668,7 +3837,33 @@ def handle_youtube_command(args):
         except Exception as e:
             print(f"Error fetching article: {e}", file=sys.stderr)
             return 1
-    
+
+    elif content_type == ContentType.X_ARTICLE:
+        # X/Twitter article pipeline (uses Jina Reader with fallbacks)
+        try:
+            content_title, content_text = fetch_x_article_content(identifier)
+            source_url = identifier
+            content_label = "Article"
+
+            word_count_actual = len(content_text.split())
+            print(f"✓ X article fetched ({len(content_text)} characters, {word_count_actual} words)")
+            print(f"Title: {content_title}")
+
+            # Assess content quality
+            quality_warnings = assess_content_quality(content_text, "article")
+            if quality_warnings:
+                print("\nContent Quality Notes:")
+                for warning in quality_warnings:
+                    print(f"  {warning}")
+            print()
+
+        except (ConnectionError, ValueError, ImportError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Error fetching X article: {e}", file=sys.stderr)
+            return 1
+
     elif content_type == ContentType.PODCAST:
         # Podcast pipeline (URL-based)
         try:
@@ -3964,7 +4159,7 @@ def handle_youtube_command(args):
         print("Generating highlights...")
 
         # Determine content type for highlights
-        if content_type == ContentType.ARTICLE:
+        if content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE]:
             hl_content_type = "article"
         elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH]:
             hl_content_type = "podcast"
@@ -4034,7 +4229,7 @@ def handle_youtube_command(args):
         # Determine correct subfolder based on content type
         if content_type == ContentType.VIDEO or content_type == ContentType.TWITTER_VIDEO:
             output_dir = base_output_dir / "youtube"
-        elif content_type == ContentType.ARTICLE:
+        elif content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE]:
             output_dir = base_output_dir / "article"
         elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"
@@ -4054,7 +4249,7 @@ def handle_youtube_command(args):
         # Determine correct subfolder based on content type
         if content_type == ContentType.VIDEO or content_type == ContentType.TWITTER_VIDEO:
             output_dir = base_output_dir / "youtube"
-        elif content_type == ContentType.ARTICLE:
+        elif content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE]:
             output_dir = base_output_dir / "article"
         elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"
@@ -4062,7 +4257,7 @@ def handle_youtube_command(args):
             output_dir = base_output_dir / "youtube"  # Default fallback
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         content_file = get_unique_filepath(output_dir, slug, f"{content_label.lower()}.txt")
         summary_file = get_unique_filepath(output_dir, slug, "summary.txt")
         
