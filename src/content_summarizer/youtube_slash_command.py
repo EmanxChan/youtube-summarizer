@@ -10,11 +10,16 @@ import subprocess
 import re
 import argparse
 import hashlib
+import os
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from enum import Enum
 import concurrent.futures
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 # Try to import AI summarizer (optional)
 try:
