@@ -50,6 +50,7 @@ class ContentType(Enum):
     TWITTER_VIDEO = "twitter_video"
     DIRECT_AUDIO = "direct_audio"  # Direct .mp3, .m4a, .wav, .ogg URLs
     X_ARTICLE = "x_article"  # X/Twitter long-form articles and text posts
+    WEB_SEARCH = "web_search"  # Jina-powered web search and summarize
 
 
 class NLTKHelper:
@@ -305,15 +306,212 @@ def fetch_x_article_content(url, max_retries=2):
     )
 
 
+def jina_fetch_url(url, timeout=30):
+    """
+    Fetch URL content using Jina Reader API.
+
+    Args:
+        url: URL to fetch
+        timeout: Request timeout in seconds
+
+    Returns:
+        tuple: (title, content) or (None, None) if failed
+    """
+    import os
+
+    jina_api_key = os.environ.get('JINA_API_KEY', '')
+    jina_url = f"https://r.jina.ai/{url}"
+
+    try:
+        headers = {
+            'Accept': 'text/plain',
+            'User-Agent': 'ContentSummarizer/1.0'
+        }
+
+        if jina_api_key:
+            headers['Authorization'] = f'Bearer {jina_api_key}'
+
+        response = requests.get(jina_url, headers=headers, timeout=timeout)
+
+        if response.status_code == 200:
+            content = response.text.strip()
+
+            # Parse title and content from Jina's markdown response
+            lines = content.split('\n')
+            title = None
+            text_lines = []
+
+            for line in lines:
+                if line.startswith('# ') and title is None:
+                    title = line[2:].strip()
+                elif line.startswith('Title: ') and title is None:
+                    title = line[7:].strip()
+                else:
+                    text_lines.append(line)
+
+            full_text = '\n'.join(text_lines).strip()
+
+            if len(full_text) >= 100:
+                return (title or "Untitled", full_text)
+
+        return (None, None)
+
+    except Exception as e:
+        print(f"  ⚠️ Jina fetch error: {str(e)[:100]}", file=sys.stderr)
+        return (None, None)
+
+
+def jina_search(query, num_results=5, timeout=60):
+    """
+    Search the web using Jina Search API and return content from top results.
+
+    Args:
+        query: Search query string
+        num_results: Number of results to fetch (3, 5, or 10)
+        timeout: Request timeout in seconds
+
+    Returns:
+        tuple: (combined_title, combined_content, sources_list) or raises exception
+    """
+    import os
+    import urllib.parse
+
+    jina_api_key = os.environ.get('JINA_API_KEY', '')
+    encoded_query = urllib.parse.quote(query)
+    jina_url = f"https://s.jina.ai/{encoded_query}"
+
+    print(f"  🔍 Searching web for: {query}")
+
+    try:
+        headers = {
+            'Accept': 'application/json',
+            'User-Agent': 'ContentSummarizer/1.0',
+            'X-Retain-Images': 'none',
+        }
+
+        if jina_api_key:
+            headers['Authorization'] = f'Bearer {jina_api_key}'
+
+        response = requests.get(jina_url, headers=headers, timeout=timeout)
+
+        if response.status_code == 200:
+            # Jina search returns JSON with results
+            try:
+                data = response.json()
+                results = data.get('data', [])[:num_results]
+            except:
+                # Fallback: parse as text if not JSON
+                # s.jina.ai can return markdown format too
+                content = response.text.strip()
+                return (f"Search: {query}", content, [])
+
+            if not results:
+                raise ValueError(f"No search results found for: {query}")
+
+            sources = []
+            combined_parts = []
+
+            for i, result in enumerate(results, 1):
+                title = result.get('title', f'Result {i}')
+                url = result.get('url', '')
+                content = result.get('content', result.get('description', ''))
+
+                sources.append({'title': title, 'url': url})
+
+                # Add section for this result
+                combined_parts.append(f"## Source {i}: {title}\n")
+                if url:
+                    combined_parts.append(f"URL: {url}\n")
+                combined_parts.append(f"\n{content}\n")
+                combined_parts.append("\n---\n")
+
+            combined_content = '\n'.join(combined_parts)
+            combined_title = f"Web Search: {query}"
+
+            print(f"  ✓ Found {len(results)} results")
+            return (combined_title, combined_content, sources)
+
+        elif response.status_code == 429:
+            raise ConnectionError("Jina API rate limited. Please try again later.")
+        else:
+            raise ConnectionError(f"Jina search failed with status {response.status_code}")
+
+    except requests.exceptions.Timeout:
+        raise ConnectionError("Search request timed out. Try a simpler query.")
+    except Exception as e:
+        if "rate limit" in str(e).lower():
+            raise ConnectionError("Jina API rate limited. Please try again later.")
+        raise
+
+
+def jina_extract_pdf(file_path, timeout=60):
+    """
+    Extract text from PDF using Jina Reader API.
+
+    Args:
+        file_path: Path to PDF file
+        timeout: Request timeout in seconds
+
+    Returns:
+        tuple: (title, content) or (None, None) if failed
+    """
+    import os
+
+    jina_api_key = os.environ.get('JINA_API_KEY', '')
+
+    try:
+        # Jina supports PDF upload via POST
+        jina_url = "https://r.jina.ai/"
+
+        headers = {
+            'User-Agent': 'ContentSummarizer/1.0'
+        }
+
+        if jina_api_key:
+            headers['Authorization'] = f'Bearer {jina_api_key}'
+
+        with open(file_path, 'rb') as f:
+            files = {'file': (os.path.basename(file_path), f, 'application/pdf')}
+            response = requests.post(jina_url, headers=headers, files=files, timeout=timeout)
+
+        if response.status_code == 200:
+            content = response.text.strip()
+
+            # Extract title from filename or content
+            title = os.path.basename(file_path).rsplit('.', 1)[0]
+
+            # Try to find title in content
+            lines = content.split('\n')
+            for line in lines:
+                if line.startswith('# '):
+                    title = line[2:].strip()
+                    break
+
+            if len(content) >= 100:
+                print(f"  ✓ Jina PDF extraction success ({len(content)} chars)")
+                return (title, content)
+
+        return (None, None)
+
+    except Exception as e:
+        print(f"  ⚠️ Jina PDF extraction error: {str(e)[:100]}", file=sys.stderr)
+        return (None, None)
+
+
 def detect_content_type(query):
     """
     Detect whether query is a YouTube video, article, podcast URL, Twitter video,
-    X article, direct audio file, or podcast search.
+    X article, direct audio file, web search, or podcast search.
 
     Returns:
         tuple: (ContentType, identifier) where identifier is video_id, article_url,
-               podcast_url, twitter_url, x_article_url, audio_url, or search_query
+               podcast_url, twitter_url, x_article_url, audio_url, search_query, or web_search_data
     """
+    # Check for web search queries (from UI)
+    if query.startswith('WEBSEARCH:'):
+        # Format: WEBSEARCH:{num_results}:{query}
+        return (ContentType.WEB_SEARCH, query)
+
     # Check for Twitter/X patterns
     if "twitter.com" in query or "x.com" in query:
         # Live broadcasts are video content
@@ -379,6 +577,8 @@ def fetch_article_content(url, max_retries=3):
     """
     Fetch and parse article content from URL.
 
+    Uses Jina Reader as primary method, falls back to cloudscraper/BeautifulSoup.
+
     Args:
         url: Article URL to fetch
         max_retries: Maximum number of retry attempts (default 3)
@@ -392,6 +592,22 @@ def fetch_article_content(url, max_retries=3):
     """
     import time
 
+    # ==========================================================================
+    # Method 1: Jina Reader (Primary - handles JS-heavy sites)
+    # ==========================================================================
+    print(f"  📖 Fetching article via Jina Reader...")
+
+    jina_title, jina_content = jina_fetch_url(url, timeout=30)
+
+    if jina_content and len(jina_content) >= 200:
+        print(f"  ✓ Jina Reader success ({len(jina_content)} chars)")
+        return (jina_title or "Article", jina_content)
+
+    print(f"  ⚠️ Jina Reader returned insufficient content, trying fallback...")
+
+    # ==========================================================================
+    # Method 2: Cloudscraper + BeautifulSoup (Fallback)
+    # ==========================================================================
     if not ARTICLE_SUPPORT:
         raise ImportError(
             "Article support not available. Install dependencies: "
@@ -496,26 +712,26 @@ def fetch_article_content(url, max_retries=3):
 
         # Generic error
         raise ConnectionError(f"Error fetching URL ({error_name}): {e}")
-    
+
     # Parse HTML
     try:
         soup = BeautifulSoup(response.content, 'lxml')
     except:
         # Fallback to html.parser if lxml not available
         soup = BeautifulSoup(response.content, 'html.parser')
-    
+
     # Extract title
     title = None
     if soup.title and soup.title.string:
         title = soup.title.string.strip()
     elif soup.h1:
         title = soup.h1.get_text().strip()
-    
+
     if not title:
         # Use domain as fallback
         parsed = urlparse(url)
         title = parsed.netloc.replace('www.', '')
-    
+
     # Try multiple content selectors (sites use different structures) - FIND FIRST
     content_root = None
     for selector in ['article', '.entry-content', '.post-content', '.article-content', 'main', '.content']:
@@ -523,26 +739,26 @@ def fetch_article_content(url, max_retries=3):
             element = soup.select_one(selector)
         else:
             element = soup.find(selector)
-        
+
         if element:
             content_root = element
             break
-    
+
     # Fallback to body if nothing found
     if not content_root:
         content_root = soup.body if soup.body else soup
-    
+
     # Now remove unwanted elements from within the content
     for element in content_root.find_all(['script', 'style', 'noscript', 'nav', 'footer', 'aside', 'header', 'iframe', 'form']):
         element.decompose()
-    
+
     # Extract text from meaningful elements
     text_parts = []
     for element in content_root.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote']):
         text = element.get_text(separator=' ', strip=True)
         if text and len(text) > 20:  # Skip very short fragments
             text_parts.append(text)
-    
+
     # Join with paragraph separators
     full_text = '\n\n'.join(text_parts)
 
@@ -550,15 +766,15 @@ def fetch_article_content(url, max_retries=3):
     full_text = re.sub(r'[^\S\n]+', ' ', full_text)  # Collapse spaces but NOT newlines
     full_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', full_text)  # Max 2 newlines
     full_text = full_text.strip()
-    
+
     # Validate minimum content length
     if len(full_text) < 200:
         # Check if it's a known difficult site
         domain = urlparse(url).netloc.lower()
         difficult_sites = ['cnn.com', 'nytimes.com', 'wsj.com', 'washingtonpost.com', 'ft.com']
-        
+
         error_msg = f"Article content too short ({len(full_text)} chars, minimum 200). "
-        
+
         if any(site in domain for site in difficult_sites):
             error_msg += (
                 f"\n\n⚠️  {domain} has strong bot protection that blocks automated scrapers.\n"
@@ -569,9 +785,10 @@ def fetch_article_content(url, max_retries=3):
             )
         else:
             error_msg += "URL may not contain readable article content."
-        
+
         raise ValueError(error_msg)
-    
+
+    print(f"  ✓ Fallback scraping success ({len(full_text)} chars)")
     return (title, full_text)
 
 
@@ -3793,6 +4010,12 @@ def handle_youtube_command(args):
     elif content_type == ContentType.X_ARTICLE:
         print(f"Detected content type: X/Twitter article")
         print(f"Fetching X article from: {identifier}...\n")
+    elif content_type == ContentType.WEB_SEARCH:
+        # Parse: WEBSEARCH:{num_results}:{query}
+        parts = identifier.split(':', 2)
+        search_query = parts[2] if len(parts) == 3 else identifier
+        print(f"Detected content type: web search")
+        print(f"Searching for: {search_query}...\n")
     elif content_type == ContentType.PODCAST:
         print(f"Detected content type: podcast (URL)")
     elif content_type == ContentType.PODCAST_SEARCH:
@@ -3862,6 +4085,49 @@ def handle_youtube_command(args):
             return 1
         except Exception as e:
             print(f"Error fetching X article: {e}", file=sys.stderr)
+            return 1
+
+    elif content_type == ContentType.WEB_SEARCH:
+        # Web search pipeline (uses Jina Search API)
+        try:
+            # Parse: WEBSEARCH:{num_results}:{query}
+            parts = identifier.split(':', 2)
+            if len(parts) != 3:
+                raise ValueError("Invalid web search format")
+
+            num_results = int(parts[1])
+            search_query = parts[2]
+
+            content_title, content_text, sources = jina_search(search_query, num_results=num_results)
+            source_url = f"search://{search_query}"
+            content_label = "Article"
+
+            word_count_actual = len(content_text.split())
+            print(f"✓ Web search completed ({len(content_text)} characters, {word_count_actual} words)")
+            print(f"Title: {content_title}")
+            print(f"Sources: {len(sources)} articles")
+
+            # Show sources
+            if sources:
+                print("\nSources:")
+                for i, src in enumerate(sources, 1):
+                    print(f"  {i}. {src.get('title', 'Untitled')}")
+                    if src.get('url'):
+                        print(f"     {src['url']}")
+
+            # Assess content quality
+            quality_warnings = assess_content_quality(content_text, "article")
+            if quality_warnings:
+                print("\nContent Quality Notes:")
+                for warning in quality_warnings:
+                    print(f"  {warning}")
+            print()
+
+        except (ConnectionError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Error performing web search: {e}", file=sys.stderr)
             return 1
 
     elif content_type == ContentType.PODCAST:
@@ -4159,7 +4425,7 @@ def handle_youtube_command(args):
         print("Generating highlights...")
 
         # Determine content type for highlights
-        if content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE]:
+        if content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE, ContentType.WEB_SEARCH]:
             hl_content_type = "article"
         elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH]:
             hl_content_type = "podcast"
@@ -4229,7 +4495,7 @@ def handle_youtube_command(args):
         # Determine correct subfolder based on content type
         if content_type == ContentType.VIDEO or content_type == ContentType.TWITTER_VIDEO:
             output_dir = base_output_dir / "youtube"
-        elif content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE]:
+        elif content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE, ContentType.WEB_SEARCH]:
             output_dir = base_output_dir / "article"
         elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"
@@ -4249,7 +4515,7 @@ def handle_youtube_command(args):
         # Determine correct subfolder based on content type
         if content_type == ContentType.VIDEO or content_type == ContentType.TWITTER_VIDEO:
             output_dir = base_output_dir / "youtube"
-        elif content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE]:
+        elif content_type in [ContentType.ARTICLE, ContentType.X_ARTICLE, ContentType.WEB_SEARCH]:
             output_dir = base_output_dir / "article"
         elif content_type in [ContentType.PODCAST, ContentType.PODCAST_SEARCH, ContentType.DIRECT_AUDIO]:
             output_dir = base_output_dir / "podcast"

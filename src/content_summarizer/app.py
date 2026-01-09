@@ -247,10 +247,11 @@ components.html("""
 SHORTCUT_HINT = "⌨️ Press **⌘/Ctrl + Enter** to summarize"
 
 # === Tabbed Input Interface with Dedicated Content Types ===
-tab_yt, tab_podcast, tab_article, tab_upload, tab_text, tab_history = st.tabs([
+tab_yt, tab_podcast, tab_article, tab_search, tab_upload, tab_text, tab_history = st.tabs([
     "🎬 YouTube",
     "🎙️ Podcast",
     "📰 Article",
+    "🔍 Search",
     "📎 Upload",
     "📝 Text",
     "📜 History"
@@ -364,6 +365,38 @@ with tab_article:
                 st.info("ℹ️ X URL detected - will attempt to fetch content")
         else:
             st.success("✓ Article URL detected")
+
+with tab_search:
+    st.markdown("### Search & Summarize")
+    st.caption("Search the web for a topic and get a combined summary of top articles")
+
+    web_search_query = st.text_input(
+        "Search Query",
+        placeholder="AI trends in healthcare 2025, latest news on electric vehicles...",
+        label_visibility="collapsed",
+        key=f"web_search_input_{input_counter}"
+    )
+
+    # Result count dropdown
+    search_col1, search_col2 = st.columns([3, 1])
+    with search_col2:
+        num_results = st.selectbox(
+            "Results",
+            options=[3, 5, 10],
+            index=1,  # Default to 5
+            help="More results = better coverage but uses more Jina tokens",
+            key=f"search_results_count_{input_counter}"
+        )
+
+    # Token estimate
+    token_estimates = {3: "~6-15K", 5: "~10-25K", 10: "~20-50K"}
+    st.caption(f"💡 Estimated tokens: {token_estimates.get(num_results, '~10-25K')} • {SHORTCUT_HINT}")
+
+    if web_search_query:
+        input_type = "search"
+        # Pack query and num_results together
+        content = f"WEBSEARCH:{num_results}:{web_search_query}"
+        st.success(f"✓ Will search for: \"{web_search_query}\" ({num_results} articles)")
 
 with tab_upload:
     st.markdown("### Upload Audio, Video, or PDF")
@@ -1601,6 +1634,111 @@ except Exception as e:
                 st.code("STDERR:\n" + (result.stderr or "(empty)"))
 
 
+def process_search(search_content, words):
+    """Process web search query using Jina Search API"""
+
+    # Parse the packed content: WEBSEARCH:{num_results}:{query}
+    parts = search_content.split(':', 2)
+    if len(parts) != 3 or parts[0] != 'WEBSEARCH':
+        st.error("❌ Invalid search format")
+        return
+
+    num_results = int(parts[1])
+    query = parts[2]
+
+    status_placeholder = st.empty()
+    status_placeholder.info(f"🔍 Searching web for: {query}...")
+
+    with st.spinner("Searching and fetching content..."):
+        env = os.environ.copy()
+        env['GROQ_API_KEY'] = GROQ_API_KEY
+
+        # Add src directory to PYTHONPATH
+        src_path = str(ROOT / "src")
+        if 'PYTHONPATH' in env:
+            env['PYTHONPATH'] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+        else:
+            env['PYTHONPATH'] = src_path
+
+        # Use direct script path
+        script_path = ROOT / "src" / "content_summarizer" / "youtube_slash_command.py"
+
+        # Pass the search query with special prefix
+        search_identifier = f"WEBSEARCH:{num_results}:{query}"
+
+        cmd = [
+            sys.executable, str(script_path), search_identifier,
+            "--format", "md",
+            "--words", str(words),
+            "--ai-provider", os.getenv("AI_PROVIDER", "groq"),
+            "--ai-model", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        ]
+
+        status_placeholder.info("📥 Fetching articles from search results...")
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+        status_placeholder.empty()
+
+        out = (res.stdout or "") + ("\n" + res.stderr if res.stderr else "")
+
+        # Check for AI provider confirmation
+        mm = re.search(r"Using\s+(\w+)\s+AI\s*\(model:\s*([^)]+)\)", out)
+        if mm:
+            provider, model = mm.group(1), mm.group(2)
+            st.success(f"✅ AI Provider: {provider} • Model: {model}")
+
+        # Try to parse markdown file output
+        m = re.search(r"Markdown document saved:\s*(.+)", out)
+        if res.returncode == 0 and m:
+            path = m.group(1).strip()
+            st.success(f"✅ Search summary generated!")
+
+            # Track token usage
+            estimated_tokens = estimate_processing_tokens('url', words) * 2  # More for search
+            save_token_usage(estimated_tokens)
+
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    # Save to session state
+                    st.session_state.last_result = {
+                        'content': content,
+                        'filename': os.path.basename(path),
+                        'url': f"search://{query}",
+                        'output_file': path
+                    }
+
+                    # Extract title
+                    title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+                    title = title_match.group(1) if title_match else f"Search: {query}"
+
+                    # Extract summary preview
+                    summary_match = re.search(r'## 📝 Executive Summary\s+(.+?)(?=\n##|\n---|\Z)', content, re.DOTALL)
+                    summary_preview = summary_match.group(1).strip()[:300] if summary_match else ""
+
+                    # Record in history
+                    record_history(
+                        url=f"search://{query}",
+                        title=title,
+                        content_type="article",
+                        source_label=f"Web Search ({num_results} sources)",
+                        summary=summary_preview
+                    )
+
+                except Exception as e:
+                    st.warning(f"Could not read saved file: {e}")
+                    with st.expander("🔍 Processing Output"):
+                        st.code(out)
+            else:
+                with st.expander("🔍 Processing Output"):
+                    st.code(out)
+        else:
+            st.error("❌ Failed to generate search summary. Check output below.")
+            with st.expander("🔍 Error Details"):
+                st.code(out)
+
+
 # ============================================================================
 # Main Processing Logic
 # ============================================================================
@@ -1610,6 +1748,9 @@ if run:
         st.error("❌ Please provide content in one of the tabs above")
     elif input_type == "url":
         process_url(content, words)
+        # Results will be displayed below after session state is set
+    elif input_type == "search":
+        process_search(content, words)
         # Results will be displayed below after session state is set
     elif input_type == "file":
         # Check file size (200 MB limit for cloud deployments)
