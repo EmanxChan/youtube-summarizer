@@ -1,7 +1,12 @@
 """PDF text extraction and cleaning utilities."""
 
 import re
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 
 def clean_pdf_text(raw_text):
@@ -86,7 +91,6 @@ def extract_text_from_pdf(file_path):
     # Method 1: Jina Reader API (Primary - handles complex PDFs well)
     # ==========================================================================
     try:
-        import os
         import requests
 
         jina_api_key = os.environ.get('JINA_API_KEY', '')
