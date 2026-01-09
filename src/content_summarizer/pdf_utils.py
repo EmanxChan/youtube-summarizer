@@ -9,6 +9,21 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 
+def get_jina_api_key():
+    """Get Jina API key from environment or Streamlit secrets."""
+    key = os.environ.get('JINA_API_KEY', '')
+    if key:
+        return key
+    try:
+        import streamlit as st
+        key = st.secrets.get('JINA_API_KEY', '')
+        if key:
+            return key
+    except Exception:
+        pass
+    return ''
+
+
 def clean_pdf_text(raw_text):
     """Clean and format PDF extracted text into proper paragraphs.
     
@@ -93,7 +108,7 @@ def extract_text_from_pdf(file_path):
     try:
         import requests
 
-        jina_api_key = os.environ.get('JINA_API_KEY', '')
+        jina_api_key = get_jina_api_key()
 
         if jina_api_key or True:  # Try even without key (lower rate limits)
             print("  📖 Extracting PDF via Jina Reader...")

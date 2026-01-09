@@ -21,6 +21,26 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
+
+def get_jina_api_key():
+    """Get Jina API key from environment or Streamlit secrets."""
+    # First try os.environ
+    key = os.environ.get('JINA_API_KEY', '')
+    if key:
+        return key
+
+    # Then try Streamlit secrets
+    try:
+        import streamlit as st
+        key = st.secrets.get('JINA_API_KEY', '')
+        if key:
+            return key
+    except Exception:
+        pass
+
+    return ''
+
+
 # Try to import AI summarizer (optional)
 try:
     from content_summarizer.ai_summarizer import AITranscriptSummarizer
@@ -213,7 +233,7 @@ def fetch_x_article_content(url, max_retries=2):
     # ==========================================================================
     print("  📖 Fetching X article via Jina Reader...")
 
-    jina_api_key = os.environ.get('JINA_API_KEY', '')
+    jina_api_key = get_jina_api_key()
     jina_url = f"https://r.jina.ai/{url}"
 
     for attempt in range(max_retries):
@@ -324,7 +344,7 @@ def jina_fetch_url(url, timeout=30):
     """
     import os
 
-    jina_api_key = os.environ.get('JINA_API_KEY', '')
+    jina_api_key = get_jina_api_key()
     jina_url = f"https://r.jina.ai/{url}"
 
     try:
@@ -381,7 +401,7 @@ def jina_search(query, num_results=5, timeout=60):
     import os
     import urllib.parse
 
-    jina_api_key = os.environ.get('JINA_API_KEY', '')
+    jina_api_key = get_jina_api_key()
     encoded_query = urllib.parse.quote(query)
     jina_url = f"https://s.jina.ai/{encoded_query}"
 
@@ -462,7 +482,7 @@ def jina_extract_pdf(file_path, timeout=60):
     """
     import os
 
-    jina_api_key = os.environ.get('JINA_API_KEY', '')
+    jina_api_key = get_jina_api_key()
 
     try:
         # Jina supports PDF upload via POST
