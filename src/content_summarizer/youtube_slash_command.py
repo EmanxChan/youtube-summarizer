@@ -401,6 +401,21 @@ def jina_search(query, num_results=5, timeout=60):
     import os
     import urllib.parse
 
+    def clean_jina_content(text):
+        """Remove excessive markdown formatting from Jina content."""
+        if not text:
+            return text
+        # Remove bold markers
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        # Remove italic markers
+        text = re.sub(r'\*([^*]+)\*', r'\1', text)
+        text = re.sub(r'_([^_]+)_', r'\1', text)
+        # Remove excessive headers (keep h2 and h3 only)
+        text = re.sub(r'^#{4,}\s*', '### ', text, flags=re.MULTILINE)
+        # Clean up multiple blank lines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
     jina_api_key = get_jina_api_key()
     encoded_query = urllib.parse.quote(query)
     jina_url = f"https://s.jina.ai/{encoded_query}"
@@ -428,14 +443,15 @@ def jina_search(query, num_results=5, timeout=60):
                 # Fallback: parse as text if not JSON
                 # s.jina.ai can return markdown format too
                 content = response.text.strip()
-                return (f"Search: {query}", content, [])
+                return (f"Search: {query}", clean_jina_content(content), [])
 
             if not results:
                 raise ValueError(f"No search results found for: {query}")
 
             sources = []
-            combined_parts = []
+            article_sections = []
 
+            # First pass: collect all sources
             for i, result in enumerate(results, 1):
                 title = result.get('title', f'Result {i}')
                 url = result.get('url', '')
@@ -443,14 +459,35 @@ def jina_search(query, num_results=5, timeout=60):
 
                 sources.append({'title': title, 'url': url})
 
-                # Add section for this result
-                combined_parts.append(f"## Source {i}: {title}\n")
-                if url:
-                    combined_parts.append(f"URL: {url}\n")
-                combined_parts.append(f"\n{content}\n")
-                combined_parts.append("\n---\n")
+                # Clean the content
+                cleaned_content = clean_jina_content(content)
+                article_sections.append({
+                    'num': i,
+                    'title': title,
+                    'content': cleaned_content
+                })
 
-            combined_content = '\n'.join(combined_parts)
+            # Build output with sources at top
+            output_parts = []
+
+            # Table of contents / Sources section at the top
+            output_parts.append("## Sources\n")
+            for i, src in enumerate(sources, 1):
+                if src['url']:
+                    output_parts.append(f"{i}. {src['title']}")
+                    output_parts.append(f"   {src['url']}\n")
+                else:
+                    output_parts.append(f"{i}. {src['title']}\n")
+
+            output_parts.append("\n---\n")
+
+            # Article content sections
+            for section in article_sections:
+                output_parts.append(f"## Article {section['num']}: {section['title']}\n")
+                output_parts.append(f"{section['content']}\n")
+                output_parts.append("\n---\n")
+
+            combined_content = '\n'.join(output_parts)
             combined_title = f"Web Search: {query}"
 
             print(f"  ✓ Found {len(results)} results")
