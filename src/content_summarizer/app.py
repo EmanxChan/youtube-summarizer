@@ -170,10 +170,13 @@ def get_secret(key_name):
 GROQ_API_KEY = get_secret('GROQ_API_KEY')
 
 # Load optional API keys and set them as environment variables for subprocesses
-for optional_key in ['LISTEN_NOTES_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'HF_TOKEN', 'HUGGINGFACE_TOKEN']:
+for optional_key in ['LISTEN_NOTES_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'HF_TOKEN', 'HUGGINGFACE_TOKEN', 'TAVILY_API_KEY']:
     value = get_secret(optional_key)
     if value:
         os.environ[optional_key] = value
+
+# Tavily API key (for AI Research Assistant chat)
+TAVILY_API_KEY = get_secret('TAVILY_API_KEY')
 
 # Check if API key is set
 if not GROQ_API_KEY:
@@ -247,14 +250,15 @@ components.html("""
 SHORTCUT_HINT = "⌨️ Press **⌘/Ctrl + Enter** to summarize"
 
 # === Tabbed Input Interface with Dedicated Content Types ===
-tab_yt, tab_podcast, tab_article, tab_search, tab_upload, tab_text, tab_history = st.tabs([
+tab_yt, tab_podcast, tab_article, tab_search, tab_upload, tab_text, tab_history, tab_chat = st.tabs([
     "🎬 YouTube",
     "🎙️ Podcast",
     "📰 Article",
     "🔍 Search",
     "📎 Upload",
     "📝 Text",
-    "📜 History"
+    "📜 History",
+    "💬 Chat"
 ])
 
 input_type = None
@@ -570,6 +574,166 @@ with tab_history:
     else:
         st.info("📭 No history yet. Your summarized content will appear here.")
         st.caption("Process a YouTube video, podcast, or article to get started.")
+
+
+def render_tavily_chat_tab():
+    """Standalone AI research chatbot powered by Tavily web search + Groq."""
+    st.markdown("### AI Research Assistant")
+    st.caption("Ask anything — I'll search the web and give you an AI-powered answer with sources.")
+
+    # Initialize state
+    if 'tavily_chat_history' not in st.session_state:
+        st.session_state.tavily_chat_history = []
+
+    # Check Tavily key
+    if not TAVILY_API_KEY:
+        st.error("⚠️ TAVILY_API_KEY not configured.")
+        st.code("TAVILY_API_KEY=your_key_here", language="bash")
+        st.markdown("Get a free API key at [app.tavily.com](https://app.tavily.com)")
+        return
+
+    # Controls row
+    ctrl_col1, ctrl_col2 = st.columns([5, 1])
+    with ctrl_col1:
+        web_search_on = st.toggle(
+            "Web search (Tavily)",
+            value=True,
+            help="Search the web for current information to answer your question",
+            key="tavily_web_search_toggle"
+        )
+    with ctrl_col2:
+        if st.session_state.tavily_chat_history:
+            if st.button("Clear", key="clear_tavily_chat", help="Clear chat history"):
+                st.session_state.tavily_chat_history = []
+                st.rerun()
+
+    # Display existing chat history
+    for msg in st.session_state.tavily_chat_history:
+        if msg['role'] == 'user':
+            st.markdown(f"**You:** {msg['content']}")
+        else:
+            st.markdown(f"**AI:** {msg['content']}")
+            if msg.get('sources'):
+                with st.expander("Sources", expanded=False):
+                    for src in msg['sources']:
+                        st.markdown(f"- [{src['title']}]({src['url']})")
+        st.markdown("---")
+
+    # Chat input form
+    with st.form(key="tavily_chat_form", clear_on_submit=True):
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            user_input = st.text_input(
+                "Question",
+                placeholder="Ask anything... e.g. 'What are the latest AI trends?' or 'Explain quantum computing'",
+                label_visibility="collapsed"
+            )
+        with col2:
+            submit = st.form_submit_button("Ask", type="primary", use_container_width=True)
+
+    if submit and user_input and user_input.strip():
+        question = user_input.strip()
+        st.session_state.tavily_chat_history.append({'role': 'user', 'content': question})
+
+        with st.spinner("Searching and thinking..."):
+            try:
+                sources = []
+                search_context = ""
+
+                # Tavily web search
+                if web_search_on:
+                    try:
+                        from tavily import TavilyClient
+                        tavily = TavilyClient(api_key=TAVILY_API_KEY)
+                        results = tavily.search(
+                            question,
+                            max_results=5,
+                            include_answer=True
+                        )
+
+                        if results.get('answer'):
+                            search_context += f"Quick answer: {results['answer']}\n\n"
+
+                        for r in results.get('results', []):
+                            snippet = r.get('content', '')[:600]
+                            search_context += f"Source: {r['title']}\nURL: {r['url']}\n{snippet}\n\n"
+                            sources.append({'title': r['title'], 'url': r['url']})
+
+                    except Exception as search_err:
+                        st.warning(f"Web search unavailable: {search_err}. Answering from AI knowledge.")
+
+                # Include loaded content context if a summary is open
+                loaded_context = ""
+                if 'last_result' in st.session_state and st.session_state.last_result:
+                    loaded_md = st.session_state.last_result.get('content', '')
+                    summary_match = re.search(
+                        r'## 📝 Executive Summary\s+(.+?)(?=\n##|\n---|\Z)',
+                        loaded_md, re.DOTALL
+                    )
+                    if summary_match:
+                        loaded_context = (
+                            f"\n\nLoaded content context:\n"
+                            f"{summary_match.group(1).strip()[:800]}"
+                        )
+
+                # Build prompt with search context
+                context_block = ""
+                if search_context or loaded_context:
+                    context_block = (
+                        f"\n\n---\nContext:\n{search_context}{loaded_context}\n---"
+                    )
+
+                # Call Groq via OpenAI-compatible client
+                import openai as _openai
+                _client = _openai.OpenAI(
+                    api_key=GROQ_API_KEY,
+                    base_url="https://api.groq.com/openai/v1"
+                )
+
+                system_prompt = (
+                    "You are a helpful AI research assistant. "
+                    "Answer questions clearly and accurately using the provided web search results. "
+                    "Cite sources naturally in your response by mentioning the title or website. "
+                    "Be concise but thorough. Use markdown formatting for readability."
+                )
+
+                # Build message history (last 6 turns for context)
+                messages = [{"role": "system", "content": system_prompt}]
+                for h in st.session_state.tavily_chat_history[-7:-1]:
+                    if h['role'] in ('user', 'assistant'):
+                        messages.append({"role": h['role'], "content": h['content']})
+                messages.append({"role": "user", "content": question + context_block})
+
+                resp = _client.chat.completions.create(
+                    model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+
+                answer = resp.choices[0].message.content
+                st.session_state.tavily_chat_history.append({
+                    'role': 'assistant',
+                    'content': answer,
+                    'sources': sources
+                })
+                st.rerun()
+
+            except Exception as e:
+                err = str(e)
+                if "401" in err or "authentication" in err.lower():
+                    st.error("API key error. Check your GROQ_API_KEY.")
+                elif "tavily" in err.lower():
+                    st.error("Tavily error. Check your TAVILY_API_KEY.")
+                else:
+                    st.error(f"Error: {err}")
+
+    st.caption("Powered by Tavily Search + Groq AI")
+
+
+with tab_chat:
+    render_tavily_chat_tab()
+
 
 # Handle re-process trigger (must be outside tabs to work)
 if 'trigger_reprocess' in st.session_state and st.session_state.trigger_reprocess:
@@ -987,8 +1151,23 @@ def render_chat_section(content: str, title: str, output_file: str = None, tab_k
 
     # Chat section
     st.markdown("---")
-    st.markdown("### 💬 Ask About This Content")
-    st.caption("Ask questions about the content and get AI-powered answers based on the summary and transcript.")
+
+    # Header row: title + Tavily toggle
+    hdr_col1, hdr_col2 = st.columns([4, 2])
+    with hdr_col1:
+        st.markdown("### 💬 Ask About This Content")
+    with hdr_col2:
+        tavily_on = TAVILY_API_KEY and st.toggle(
+            "Web search (Tavily)",
+            value=bool(TAVILY_API_KEY),
+            help="Also search the web to enrich answers with current information",
+            key=f"tavily_toggle_{tab_key}"
+        )
+
+    if tavily_on:
+        st.caption("Ask questions — answers combine the content above with live web search results.")
+    else:
+        st.caption("Ask questions about the content and get AI-powered answers based on the summary and transcript.")
 
     # Display chat history for this tab
     chat_container = st.container()
@@ -998,6 +1177,10 @@ def render_chat_section(content: str, title: str, output_file: str = None, tab_k
                 st.markdown(f"**You:** {msg['content']}")
             else:
                 st.markdown(f"**AI:** {msg['content']}")
+                if msg.get('sources'):
+                    with st.expander("Sources", expanded=False):
+                        for src in msg['sources']:
+                            st.markdown(f"- [{src['title']}]({src['url']})")
 
     # Check API key availability
     api_key = os.getenv('GROQ_API_KEY', '')
@@ -1019,27 +1202,96 @@ def render_chat_section(content: str, title: str, output_file: str = None, tab_k
 
     # Handle send
     if send_clicked and user_question.strip():
+        user_q = user_question.strip()
         with st.spinner("Thinking..."):
             try:
-                summarizer = AITranscriptSummarizer(
-                    provider='groq',
-                    model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
-                )
-
                 ctx = st.session_state[context_key]
-                response = summarizer.generate_chat_response(
-                    question=user_question.strip(),
-                    transcript=ctx.get('transcript', ''),
-                    summary=ctx.get('summary', ''),
-                    takeaways=ctx.get('takeaways', []),
-                    title=ctx.get('title', 'Content'),
-                    chat_history=st.session_state[history_key]
-                )
+                sources = []
+                web_context = ""
+
+                # Tavily web search — enrich answer with live results
+                if tavily_on and TAVILY_API_KEY:
+                    try:
+                        from tavily import TavilyClient
+                        tavily = TavilyClient(api_key=TAVILY_API_KEY)
+                        # Add content title to the query for better relevance
+                        enriched_query = f"{user_q} {ctx.get('title', '')}".strip()
+                        results = tavily.search(enriched_query, max_results=4, include_answer=True)
+
+                        if results.get('answer'):
+                            web_context += f"Web answer: {results['answer']}\n\n"
+                        for r in results.get('results', []):
+                            web_context += f"Source: {r['title']}\n{r.get('content', '')[:500]}\n\n"
+                            sources.append({'title': r['title'], 'url': r['url']})
+                    except Exception as search_err:
+                        print(f"Tavily search failed: {search_err}", file=sys.stderr)
+
+                if tavily_on and web_context:
+                    # Build a combined prompt using direct Groq call so we can
+                    # blend content context + web results with one system prompt
+                    import openai as _openai
+                    _client = _openai.OpenAI(
+                        api_key=GROQ_API_KEY,
+                        base_url="https://api.groq.com/openai/v1"
+                    )
+
+                    takeaways_text = "\n".join(f"• {t}" for t in ctx.get('takeaways', [])) or "N/A"
+                    transcript_excerpt = ctx.get('transcript', '')[:3000]
+
+                    system_prompt = (
+                        "You are a helpful assistant. The user just consumed some content and is asking a question about it. "
+                        "You have access to both the content itself AND live web search results. "
+                        "Prioritise answering from the content, but use web results to add context, "
+                        "clarify, or expand where the content falls short. "
+                        "Cite web sources naturally by mentioning the title or site. "
+                        "Be concise (3-5 sentences) unless the user asks for detail."
+                    )
+
+                    user_prompt = (
+                        f"CONTENT TITLE: {ctx.get('title', 'Content')}\n\n"
+                        f"KEY TAKEAWAYS:\n{takeaways_text}\n\n"
+                        f"SUMMARY:\n{ctx.get('summary', '')}\n\n"
+                        f"TRANSCRIPT EXCERPT:\n{transcript_excerpt}\n\n"
+                        f"WEB SEARCH RESULTS:\n{web_context}\n\n"
+                        f"QUESTION: {user_q}"
+                    )
+
+                    messages = [{"role": "system", "content": system_prompt}]
+                    for h in st.session_state[history_key][-6:]:
+                        if h['role'] in ('user', 'assistant'):
+                            messages.append({"role": h['role'], "content": h['content']})
+                    messages.append({"role": "user", "content": user_prompt})
+
+                    resp = _client.chat.completions.create(
+                        model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+                        messages=messages,
+                        max_tokens=800,
+                        temperature=0.7
+                    )
+                    response = resp.choices[0].message.content
+
+                else:
+                    # No Tavily — use existing content-only summarizer
+                    summarizer = AITranscriptSummarizer(
+                        provider='groq',
+                        model=os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+                    )
+                    response = summarizer.generate_chat_response(
+                        question=user_q,
+                        transcript=ctx.get('transcript', ''),
+                        summary=ctx.get('summary', ''),
+                        takeaways=ctx.get('takeaways', []),
+                        title=ctx.get('title', 'Content'),
+                        chat_history=st.session_state[history_key]
+                    )
 
                 # Add to history for this tab
-                user_q = user_question.strip()
                 st.session_state[history_key].append({'role': 'user', 'content': user_q})
-                st.session_state[history_key].append({'role': 'assistant', 'content': response})
+                st.session_state[history_key].append({
+                    'role': 'assistant',
+                    'content': response,
+                    'sources': sources
+                })
 
                 # Persist to markdown file if path provided
                 if output_file and os.path.exists(output_file):
@@ -1047,11 +1299,9 @@ def render_chat_section(content: str, title: str, output_file: str = None, tab_k
                         with open(output_file, 'r', encoding='utf-8') as f:
                             file_content = f.read()
 
-                        # Add Q&A section if not present
                         if '## 💬 Q&A' not in file_content:
                             file_content += "\n\n---\n\n## 💬 Q&A\n"
 
-                        # Append this Q&A
                         qa_entry = f"\n**Q:** {user_q}\n\n**A:** {response}\n"
                         file_content += qa_entry
 
